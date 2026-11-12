@@ -11,11 +11,21 @@ export interface Facts {
   h1: number;
   imgTotal: number;
   imgNoAlt: number;
+  /** `<img>`/`next/image` without width+height (CLS risk). */
+  imgNoDim: number;
+  /** noindex came from a component prop (`<NextSeo noindex>`, `<SEO noindex>`). */
+  noindexProp: boolean;
+  /** `lang|href` of hreflang alternates. */
+  hreflang: string[];
+  jsonLd: number;
+  /** JSON-LD blocks that are provably not valid JSON. */
+  jsonLdInvalid: number;
 }
 
 export const emptyFacts = (): Facts => ({
   title: "absent", description: "absent", canonical: "absent",
   noindex: false, nofollow: false, h1: 0, imgTotal: 0, imgNoAlt: 0,
+  imgNoDim: 0, noindexProp: false, hreflang: [], jsonLd: 0, jsonLdInvalid: 0,
 });
 
 const rank: Record<Presence, number> = { absent: 0, empty: 1, present: 2 };
@@ -27,6 +37,8 @@ export function mergeFacts(a: Facts, b: Facts): Facts {
     canonical: best(a.canonical, b.canonical),
     noindex: a.noindex || b.noindex, nofollow: a.nofollow || b.nofollow,
     h1: a.h1 + b.h1, imgTotal: a.imgTotal + b.imgTotal, imgNoAlt: a.imgNoAlt + b.imgNoAlt,
+    imgNoDim: a.imgNoDim + b.imgNoDim, noindexProp: a.noindexProp || b.noindexProp,
+    hreflang: [...a.hreflang, ...b.hreflang], jsonLd: a.jsonLd + b.jsonLd, jsonLdInvalid: a.jsonLdInvalid + b.jsonLdInvalid,
   };
 }
 
@@ -52,23 +64,53 @@ function robotsDirectives(content: string, f: Facts) {
   if (/\bnofollow\b|\bnone\b/.test(c)) f.nofollow = true;
 }
 
+const SEO_COMPONENT = /^(?:NextSeo|SEO|Seo|SeoHead|SeoMeta|Head|Meta|MetaTags|[A-Z]\w*(?:Head|Seo|SEO))$/;
+const LAYOUT_COMPONENT = /^(?:[A-Z]\w*)?Layout$/;
+const JSONLD_COMPONENT = /^(?:\w*JsonLd|\w*JSONLD|\w*JsonLD)$/;
+/** `{ ...template }` / `${}` markers: the text is templated, so its JSON validity can't be judged. */
+const TEMPLATED = /\{\{|\$\{|\{[#@:/]?\s*[A-Za-z_$(.\[`]|\{`/;
+
+function propPresence(v: string | undefined): Presence {
+  if (v === undefined) return "absent";
+  const t = v.trim();
+  if (!t || /^\{\s*(["'`])\1\s*\}$/.test(t)) return "empty";
+  return "present";
+}
+const propTrue = (attrs: Record<string, string>, k: string) =>
+  k in attrs && !/^\{?\s*["']?false["']?\s*\}?$/i.test(attrs[k].trim());
+
 /** Parse markup (html/jsx/astro/vue/svelte) with htmlparser2. Lenient: never throws. */
 export function extractMarkup(src: string, kind: FileKind): Facts {
   const f = emptyFacts();
   if (kind === "astro") src = src.replace(/^\s*---[\s\S]*?\n---/, "");
+  const staticImages = new Set<string>();
+  for (const m of src.matchAll(/import\s+(\w+)\s+from\s+['"][^'"]+\.(?:png|jpe?g|gif|webp|avif|svg)(?:\?[^'"]*)?['"]/gi)) staticImages.add(m[1]);
   let inTitle = false;
   let titleText = "";
   let titleSeen = false;
+  let inLd = false;
+  let ldText = "";
+  let ldAttrsTemplated = false;
   const parser = new Parser(
     {
       onopentag(name, attrs) {
         const lc = name === "title" || name === "TITLE" ? "title" : name;
+        const spread = Object.keys(attrs).some((k) => k.startsWith("{") || k.startsWith("..."));
         if (lc === "title") { inTitle = true; titleText = ""; titleSeen = true; }
         else if (name === "h1" || name === "H1") f.h1++;
         else if (name === "img" || name === "IMG" || name === "Image") {
           f.imgTotal++;
-          const hasSpread = Object.keys(attrs).some((k) => k.startsWith("{") || k.startsWith("..."));
-          if (!("alt" in attrs) && !hasSpread) f.imgNoAlt++;
+          if (!("alt" in attrs) && !spread) f.imgNoAlt++;
+          const isNextImage = name === "Image" && kind === "jsx";
+          if ((name !== "Image" || isNextImage) && !spread) {
+            const cls = attrs.class ?? attrs.classname ?? "";
+            const style = attrs.style ?? "";
+            const sized = ("width" in attrs && "height" in attrs)
+              || (isNextImage && ("fill" in attrs || staticImages.has(/^\{\s*(\w+)\s*\}$/.exec(attrs.src ?? "")?.[1] ?? "")))
+              || /\baspect-/.test(cls) || /\bsize-\S+/.test(cls) || (/(?:^|[\s"'`:])w-\S+/.test(cls) && /(?:^|[\s"'`:])h-\S+/.test(cls))
+              || /aspect-ratio|\bheight\s*:/.test(style);
+            if (!sized) f.imgNoDim++;
+          }
         } else if (name === "meta") {
           const n = (attrs.name ?? "").toLowerCase();
           const content = attrs.content ?? "";
@@ -76,13 +118,35 @@ export function extractMarkup(src: string, kind: FileKind): Facts {
           if (n === "robots" || n === "googlebot") robotsDirectives(content, f);
         } else if (name === "link" && (attrs.rel ?? "").toLowerCase() === "canonical") {
           f.canonical = best(f.canonical, (attrs.href ?? "").trim() ? "present" : "empty");
+        } else if (name === "link" && /\balternate\b/i.test(attrs.rel ?? "") && attrs.hreflang) {
+          f.hreflang.push(`${attrs.hreflang.toLowerCase()}|${(attrs.href ?? "").trim()}`);
+        } else if ((name === "script" || name === "Script") && /ld\+json/i.test(attrs.type ?? "")) {
+          f.jsonLd++; inLd = true; ldText = "";
+          ldAttrsTemplated = spread || Object.keys(attrs).some((k) => /^(?:set:html|dangerouslysetinnerhtml|src|v-html|:inner-?html|innerhtml)$/.test(k) || k.startsWith("{@html"));
+        } else if (JSONLD_COMPONENT.test(name)) {
+          f.jsonLd++;
+        } else if (SEO_COMPONENT.test(name) || (kind === "astro" && LAYOUT_COMPONENT.test(name))) {
+          // SEO component props: <NextSeo title description canonical noindex>, <SEO title=…>, <Layout title=…> (astro)
+          f.title = best(f.title, propPresence(attrs.title));
+          f.description = best(f.description, propPresence(attrs.description));
+          const canon = attrs.canonical ?? attrs.canonicalurl ?? attrs.canonical_url;
+          f.canonical = best(f.canonical, propPresence(canon));
+          if (propTrue(attrs, "noindex")) { f.noindex = true; f.noindexProp = true; }
+          if (propTrue(attrs, "nofollow")) f.nofollow = true;
+          if (typeof attrs.robots === "string") robotsDirectives(attrs.robots, f);
         }
       },
-      ontext(t) { if (inTitle) titleText += t; },
+      ontext(t) { if (inTitle) titleText += t; if (inLd) ldText += t; },
       onclosetag(name, isImplied) {
         if ((name === "title" || name === "TITLE") && inTitle) {
           inTitle = false;
           f.title = best(f.title, titleText.trim() ? "present" : "empty");
+        }
+        if (inLd && (name === "script" || name === "Script")) {
+          inLd = false;
+          const t = ldText.trim();
+          if (t && !TEMPLATED.test(t)) { try { JSON.parse(t); } catch { f.jsonLdInvalid++; } }
+          else if (!t && !ldAttrsTemplated && kind === "html") f.jsonLdInvalid++;
         }
         void isImplied;
       },
@@ -118,8 +182,12 @@ export function extractMetadata(src: string): Facts {
   if (g) regions.push(src.slice(g.index, g.index + 3000));
   const h = /\b(?:useHead|useSeoMeta|definePageMeta)\s*\(/g;
   while ((m = h.exec(src))) regions.push(src.slice(m.index, m.index + 1500));
+  // Remix `meta` / `links` exports
+  const rx = /export\s+(?:async\s+)?(?:const|function)\s+(?:meta|links)\b/g;
+  while ((m = rx.exec(src))) regions.push(src.slice(m.index, m.index + 2500));
   const region = regions.join("\n");
   if (!region) return f;
+  const hasMetaExport = /export\s+(?:async\s+)?(?:const|function)\s+meta\b/.test(src);
 
   const val = (key: string): Presence => {
     const r = new RegExp(`\\b${key}\\s*:\\s*`, "g");
@@ -137,6 +205,30 @@ export function extractMetadata(src: string): Facts {
   f.description = val("description");
   const canon = /\bcanonical\s*:\s*(['"`])(.*?)\1|\bcanonical\s*:\s*[\w{(]/s.exec(region);
   if (canon) f.canonical = canon[2] === "" ? "empty" : "present";
+  const relCanon = /\brel\s*:\s*['"]canonical['"][^}]*?\bhref\s*:\s*(['"`])(.*?)\1|\bhref\s*:\s*(['"`])(.*?)\3[^}]*?\brel\s*:\s*['"]canonical['"]/s.exec(region);
+  if (relCanon) f.canonical = best(f.canonical, (relCanon[2] ?? relCanon[4] ?? "").trim() ? "present" : "empty");
+  // meta-array objects: { name: "description", content: "…" } / { name: "robots", content: "noindex" } (Nuxt useHead, Remix meta)
+  for (const o of region.matchAll(/\{[^{}]*\}/g)) {
+    const nm = /\bname\s*:\s*(['"])([^'"]+)\1/.exec(o[0])?.[2]?.toLowerCase();
+    if (!nm) continue;
+    const c = /\bcontent\s*:\s*(?:(['"`])(.*?)\1|([^,}\s][^,}]*))/s.exec(o[0]);
+    if (!c) continue;
+    if (nm === "description") f.description = best(f.description, c[1] ? (c[2].trim() ? "present" : "empty") : "present");
+    else if ((nm === "robots" || nm === "googlebot") && c[1]) robotsDirectives(c[2], f);
+  }
+  // hreflang: Next `alternates.languages`, link objects `{ rel: 'alternate', hreflang, href }`
+  const lg = /\blanguages\s*:\s*\{/.exec(region);
+  if (lg) {
+    const block = balanced(region, lg.index + lg[0].length - 1);
+    for (const e of block.matchAll(/['"]?([\w-]+)['"]?\s*:\s*(['"`])(.*?)\2/g)) f.hreflang.push(`${e[1].toLowerCase()}|${e[3]}`);
+  }
+  for (const o of region.matchAll(/\{[^{}]*\}/g)) {
+    const hl = /\bhreflang\s*:\s*(['"])([\w-]+)\1/i.exec(o[0]);
+    const hr = /\bhref\s*:\s*(['"`])(.*?)\1/.exec(o[0]);
+    if (hl) f.hreflang.push(`${hl[2].toLowerCase()}|${hr ? hr[2] : ""}`);
+  }
+  f.jsonLd += (region.match(/application\/ld\+json/g) ?? []).length;
+  void hasMetaExport;
   if (/\brobots\s*:\s*(['"`])[^'"`]*noindex/i.test(region) || /\brobots\s*:\s*\{[^}]*\bindex\s*:\s*false/s.test(region)) f.noindex = true;
   if (/\brobots\s*:\s*(['"`])[^'"`]*nofollow/i.test(region) || /\brobots\s*:\s*\{[^}]*\bfollow\s*:\s*false/s.test(region)) f.nofollow = true;
   return f;
@@ -176,6 +268,6 @@ export function extractFacts(path: string, src: string): Facts | null {
   const kind = kindOf(path);
   if (!kind) return null;
   if (kind === "md") return extractMarkdown(src);
-  if (kind === "script") return /\bmetadata\b|generateMetadata|useHead|useSeoMeta/.test(src) ? extractMetadata(src) : null;
+  if (kind === "script") return /\bmetadata\b|generateMetadata|useHead|useSeoMeta|export\s+(?:async\s+)?(?:const|function)\s+(?:meta|links)\b|ld\+json/.test(src) ? extractMetadata(src) : null;
   return mergeFacts(extractMarkup(src, kind), extractMetadata(src));
 }

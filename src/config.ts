@@ -8,6 +8,7 @@ export const DEFAULT_SEVERITIES = {
   "robots-disallow-all": "critical",
   "homepage-removed": "critical",
   "unverifiable-critical-write": "critical",
+  "component-noindex": "critical",
   "title-removed": "warn",
   "description-removed": "warn",
   "canonical-removed": "warn",
@@ -16,6 +17,10 @@ export const DEFAULT_SEVERITIES = {
   "h1-removed": "warn",
   "img-alt-removed": "warn",
   "route-removed": "warn",
+  "hreflang-changed": "warn",
+  "jsonld-removed": "warn",
+  "jsonld-invalid": "warn",
+  "img-dimensions-removed": "warn",
   "redirect-removed": "warn",
   "sitemap-urls-removed": "warn",
   "unverifiable-write": "warn",
@@ -36,6 +41,8 @@ export interface SeoGuardConfig {
   rules: Partial<Record<RuleId, Severity>>;
   /** Site base URL, used to treat absolute links / sitemap <loc> as internal. */
   baseUrl?: string;
+  /** Snapshot the route list around every bash call to catch globs/find/rimraf/scripts (default true). */
+  snapshotRoutes?: boolean;
 }
 
 export const CONFIG_PATH = ".pi/seo-guard.json";
@@ -55,6 +62,7 @@ export function loadConfig(cwd: string): { config: SeoGuardConfig; error?: strin
       }
     }
     if (typeof raw.baseUrl === "string") config.baseUrl = raw.baseUrl;
+    if (typeof raw.snapshotRoutes === "boolean") config.snapshotRoutes = raw.snapshotRoutes;
     return { config };
   } catch (e) {
     return { config, error: `Invalid ${CONFIG_PATH}: ${(e as Error).message} (using defaults)` };

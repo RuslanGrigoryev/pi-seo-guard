@@ -1,7 +1,8 @@
 import { type ExtensionAPI, isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import { loadConfig } from "./config.ts";
 import { type Finding, formatFindings } from "./rules.ts";
-import { checkWrite, criticalRemovalFindings, routeRemovalsFromBash, unredirectedRemovals, type PendingRouteRemoval } from "./guard.ts";
+import { checkWrite, criticalRemovalFindings, routeRemovalsFromBash, unredirectedRemovals, snapshotRoutes, snapshotRemovalFindings, type PendingRouteRemoval, type RouteSnapshot } from "./guard.ts";
+import { SeoLedger } from "./ledger.ts";
 import { bashWriteFindings } from "./bashwrite.ts";
 import { formatScan, scanProject } from "./scan.ts";
 
@@ -9,8 +10,11 @@ export default function seoGuard(pi: ExtensionAPI) {
   // Findings computed in `tool_call` (before execution), delivered in `tool_result` (after execution).
   const pendingWarn = new Map<string, Finding[]>();
   const pendingRemovals = new Map<string, PendingRouteRemoval[]>();
+  const snapshots = new Map<string, RouteSnapshot>();
+  const ledger = new SeoLedger();
 
   pi.on("session_start", (_e, ctx) => {
+    ledger.reset();
     const { error } = loadConfig(ctx.cwd);
     if (error && ctx.hasUI) ctx.ui.notify(`pi-seo-guard: ${error}`, "warning");
   });
@@ -18,11 +22,12 @@ export default function seoGuard(pi: ExtensionAPI) {
   pi.on("tool_call", async (event, ctx) => {
     const { config } = loadConfig(ctx.cwd);
     let findings: Finding[] = [];
-    if (isToolCallEventType("edit", event)) findings = checkWrite(ctx.cwd, "edit", event.input, config);
-    else if (isToolCallEventType("write", event)) findings = checkWrite(ctx.cwd, "write", event.input, config);
+    if (isToolCallEventType("edit", event)) findings = checkWrite(ctx.cwd, "edit", event.input, config, ledger);
+    else if (isToolCallEventType("write", event)) findings = checkWrite(ctx.cwd, "write", event.input, config, ledger);
     else if (isToolCallEventType("bash", event)) {
       const removals = routeRemovalsFromBash(ctx.cwd, event.input.command ?? "", config);
       if (removals.length) pendingRemovals.set(event.toolCallId, removals);
+      if (config.snapshotRoutes !== false) snapshots.set(event.toolCallId, snapshotRoutes(ctx.cwd, config));
       findings = [...criticalRemovalFindings(removals, config), ...bashWriteFindings(ctx.cwd, event.input.command ?? "", config)];
     } else return;
 
@@ -40,6 +45,7 @@ export default function seoGuard(pi: ExtensionAPI) {
       if (!ok) {
         pendingWarn.delete(event.toolCallId);
         pendingRemovals.delete(event.toolCallId);
+        snapshots.delete(event.toolCallId);
         return { block: true, reason: `pi-seo-guard: the user declined a CRITICAL SEO change:\n${detail}\nDo not retry it. Stop and ask the user how to proceed.`, terminate: true };
       }
     }
@@ -50,11 +56,17 @@ export default function seoGuard(pi: ExtensionAPI) {
     const removals = pendingRemovals.get(event.toolCallId);
     pendingWarn.delete(event.toolCallId);
     pendingRemovals.delete(event.toolCallId);
+    const snap = snapshots.get(event.toolCallId);
+    snapshots.delete(event.toolCallId);
     if (event.isError) return;
     const all = [...warns];
-    if (removals) all.push(...unredirectedRemovals(ctx.cwd, removals, loadConfig(ctx.cwd).config));
-    if (!all.length) return;
-    const text = `\n\n⚠ pi-seo-guard found SEO regressions in this change. Fix them in this turn (or confirm they are intentional):\n${formatFindings(all)}`;
+    const config = loadConfig(ctx.cwd).config;
+    if (removals) all.push(...unredirectedRemovals(ctx.cwd, removals, config));
+    if (snap) all.push(...snapshotRemovalFindings(ctx.cwd, snap, config, removals ?? []));
+    const notes = ledger.drainNotes();
+    if (!all.length && !notes.length) return;
+    const text = (all.length ? `\n\n⚠ pi-seo-guard found SEO regressions in this change. Fix them in this turn (or confirm they are intentional):\n${formatFindings(all)}` : "")
+      + (notes.length ? `\n\n${notes.join("\n")}` : "");
     return { content: [...event.content, { type: "text" as const, text }] };
   });
 

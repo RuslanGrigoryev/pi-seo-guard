@@ -4,6 +4,7 @@ import { matchesAny } from "./glob.ts";
 import { type Finding, sitemapLocs } from "./rules.ts";
 import { extractFacts, kindOf } from "./extract.ts";
 import { fileToRoute, isDynamic, isRedirectConfig, matchesRoute, normalizePath, redirectCovers, redirectSources } from "./routes.ts";
+import { ancestorsOf } from "./inherit.ts";
 import { gitHeadFiles, readText, walk } from "./fs.ts";
 
 export interface ScanResult { findings: Finding[]; routes: number; filesScanned: number; notes: string[] }
@@ -66,7 +67,11 @@ export function scanProject(cwd: string, cfg: SeoGuardConfig): ScanResult {
     if (!facts) continue;
     const frontLayout = k === "md" && /^---[\s\S]*?\blayout\s*:/m.test(read(f));
     const next = /^(?:src\/)?(?:app|pages)\//.test(f);
-    const inherit = (key: "title" | "description" | "canonical") => frontLayout || layoutHas(key) || (next && key === "canonical" && layoutHas(key));
+    const fileSet = new Set(files);
+    const anc = ancestorsOf(f, read(f), (r) => fileSet.has(r), (r) => (fileSet.has(r) ? read(r) : null))
+      .map((a) => extractFacts(a, read(a))).filter(Boolean) as NonNullable<ReturnType<typeof extractFacts>>[];
+    // ancestors found (Next nesting, Astro/Vue/Svelte imports) → trust them; none resolvable → fall back to any layout-like file
+    const inherit = (key: "title" | "description" | "canonical") => frontLayout || (anc.length ? anc.some((x) => x[key] === "present") : layoutHas(key && key) && !next);
     if (facts.title !== "present" && !inherit("title")) add("missing-title", f, `Route \`${route}\` has no title.`);
     if (facts.description !== "present" && !inherit("description")) add("missing-description", f, `Route \`${route}\` has no meta description.`);
     if (facts.canonical !== "present" && !inherit("canonical")) add("missing-canonical", f, `Route \`${route}\` has no canonical link.`);

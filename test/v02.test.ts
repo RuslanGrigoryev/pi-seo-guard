@@ -123,7 +123,7 @@ describe("3. route snapshot diff for bash", () => {
     execSync("git add -A", { cwd: dir });
   });
   const cmds: [string, string][] = [
-    ["glob", "rm -rf app/blog/*"], ["find -delete", "find app/blog -name 'page.tsx' -delete"], ["git rm -r", "git rm -rq app/blog"],
+    ["glob", "rm -rf app/blog/*"], ["find -delete", "find app/blog -name 'page.tsx' -delete"], ["git rm -rf", "git rm -rqf app/blog"],
     ["rimraf-equivalent (npx unavailable offline)", "rm -rf app/blog"],
     ["node script", `node -e "require('fs').rmSync('app/blog',{recursive:true})"`],
     ["python", `python3 -c "import shutil; shutil.rmtree('app/blog')"`],

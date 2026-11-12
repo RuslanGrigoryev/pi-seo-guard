@@ -18,6 +18,9 @@ function clean(parts: string[]): string {
  */
 export function fileToRoute(rel: string): RouteInfo | null {
   rel = rel.replace(/\\/g, "/").replace(/^\.\//, "");
+  // monorepo: apps/<name>/…, packages/<name>/…, or a top-level website|www|site|web|docs dir
+  const ws = /^(?:(?:apps|packages|sites)\/[\w.-]+|website|www|site|web|docs)\/((?:src\/|app\/|pages\/|routes\/).*)$/.exec(rel);
+  if (ws) rel = ws[1];
   let m: RegExpExecArray | null;
   // Next app router
   if ((m = new RegExp(`^(?:src/)?app/(?:(.*)/)?page\\.${PAGE_EXT}$`).exec(rel)) && !/\.html$/.test(rel)) {
@@ -54,8 +57,11 @@ export const isHomepage = (route: string) => route === "/";
 export const isDynamic = (route: string) => /[:*]/.test(route);
 
 export function routeToRegExp(route: string): RegExp {
+  route = route.replace(/\*{2,}/g, "*");
+  const optionalRoot = route.endsWith("/*") ? route.slice(0, -2) || "/" : null; // optional catch-all also matches its parent
+  if (optionalRoot) return new RegExp(`^(?:${routeToRegExp(optionalRoot).source.slice(1, -1)}|${routeToRegExp(route.replace(/\/\*$/, "/\u0000")).source.slice(1, -1).replace("\u0000", ".+")})$`);
   const src = route.split("/").map((s) => (s === "*" ? ".*" : s.startsWith(":") ? "[^/]+" : s.replace(/[.+^${}()|[\]\\]/g, "\\$&"))).join("/");
-  return new RegExp("^" + src + "$");
+  try { return new RegExp("^" + src + "$"); } catch { return /(?!)/; }
 }
 
 export function normalizePath(p: string): string {
@@ -94,7 +100,8 @@ export function redirectSources(file: string, content: string): string[] {
       for (const r of [...(j.redirects ?? []), ...(j.rewrites ?? [])]) if (typeof r?.source === "string") add(r.source);
     } catch { for (const m of content.matchAll(/"source"\s*:\s*"([^"]+)"/g)) add(m[1]); }
   } else {
-    for (const m of content.matchAll(/\bsource\s*:\s*(['"`])([^'"`]+)\1/g)) add(m[2]); // next.config
+    // next.config: only `{ source, destination }` pairs (not `headers()` entries)
+    for (const m of content.matchAll(/\bsource\s*:\s*(['"`])([^'"`]+)\1[^{}]{0,200}?\bdestination\s*:/g)) add(m[2]);
     const r = /\bredirects\s*:\s*\{([\s\S]*?)\n?\s*\}\s*[,}]/.exec(content); // astro.config
     if (r) for (const m of r[1].matchAll(/(['"`])(\/[^'"`]*)\1\s*:/g)) add(m[2]);
     for (const m of content.matchAll(/(['"`])(\/[^'"`]*)\1\s*:\s*\{\s*redirect\b/g)) add(m[2]); // nuxt routeRules

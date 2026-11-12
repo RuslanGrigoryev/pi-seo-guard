@@ -83,6 +83,7 @@ const propTrue = (attrs: Record<string, string>, k: string) =>
 export function extractMarkup(src: string, kind: FileKind): Facts {
   const f = emptyFacts();
   if (kind === "astro") src = src.replace(/^\s*---[\s\S]*?\n---/, "");
+  if (kind === "jsx" || kind === "astro") src = src.replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, "");
   const staticImages = new Set<string>();
   for (const m of src.matchAll(/import\s+(\w+)\s+from\s+['"][^'"]+\.(?:png|jpe?g|gif|webp|avif|svg)(?:\?[^'"]*)?['"]/gi)) staticImages.add(m[1]);
   let inTitle = false;
@@ -127,8 +128,10 @@ export function extractMarkup(src: string, kind: FileKind): Facts {
           f.jsonLd++;
         } else if (SEO_COMPONENT.test(name) || (kind === "astro" && LAYOUT_COMPONENT.test(name))) {
           // SEO component props: <NextSeo title description canonical noindex>, <SEO title=…>, <Layout title=…> (astro)
-          f.title = best(f.title, propPresence(attrs.title));
-          f.description = best(f.description, propPresence(attrs.description));
+          // custom wrapper (`<MdxHead params={…}/>`) that takes no title prop delegates to another module: assume it supplies them
+          const delegating = !LAYOUT_COMPONENT.test(name) && !/^(?:NextSeo|SEO|Seo|Head|Meta|MetaTags|SeoHead|SeoMeta)$/.test(name) && !("title" in attrs) && Object.keys(attrs).length > 0;
+          f.title = best(f.title, delegating ? "present" : propPresence(attrs.title));
+          f.description = best(f.description, delegating ? "present" : propPresence(attrs.description));
           const canon = attrs.canonical ?? attrs.canonicalurl ?? attrs.canonical_url;
           f.canonical = best(f.canonical, propPresence(canon));
           if (propTrue(attrs, "noindex")) { f.noindex = true; f.noindexProp = true; }
@@ -199,6 +202,8 @@ export function extractMetadata(src: string): Facts {
       if (q) best_ = best(best_, q[2].trim() ? "present" : "empty");
       else if (/^[{\w(\[]/.test(rest)) best_ = best(best_, "present");
     }
+    // shorthand property: `{ title, description }`
+    if (best_ === "absent" && new RegExp(`[{,]\\s*${key}\\s*(?:,|\\}|$)`, "m").test(region)) best_ = "present";
     return best_;
   };
   f.title = val("title");
@@ -242,7 +247,7 @@ export function extractMarkdown(src: string): Facts {
   if (fm) {
     body = src.slice(fm[0].length);
     for (const line of fm[1].split(/\r?\n/)) {
-      const kv = /^([A-Za-z][\w-]*)\s*:\s*(.*)$/.exec(line);
+      const kv = /^\s*([A-Za-z][\w-]*)\s*:\s*(.*)$/.exec(line);
       if (!kv) continue;
       const key = kv[1].toLowerCase();
       const v = kv[2].replace(/\s+#.*$/, "").trim().replace(/^(['"])(.*)\1$/, "$2");

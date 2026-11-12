@@ -69,7 +69,7 @@ export function diffFile(rel: string, before: string | null, after: string, cfg:
   if (isRedirectConfig(rel)) {
     if (before) {
       const now = new Set(redirectSources(rel, after));
-      const gone = redirectSources(rel, before).filter((s) => !now.has(s));
+      const gone = redirectSources(rel, before).filter((s) => !now.has(s) && !/\.(?:png|jpe?g|gif|webp|avif|svg|ico|css|js|map|woff2?|pdf)$/i.test(s)); // static-asset redirects are noise
       if (gone.length) out.push(mk(cfg, "redirect-removed", rel, `Redirect rule(s) removed for: ${gone.slice(0, 5).join(", ")}${gone.length > 5 ? ", …" : ""} — old URLs will 404.`));
     }
     const xr = (s: string) => /x-robots-tag[^\n]{0,80}noindex/i.test(s);

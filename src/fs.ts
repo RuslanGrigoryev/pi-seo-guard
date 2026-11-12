@@ -8,6 +8,9 @@ export const SKIP_DIRS = new Set(["node_modules", ".git", ".next", ".nuxt", ".sv
 export const toPosix = (p: string) => p.split(sep).join("/");
 export const rel = (cwd: string, abs: string) => toPosix(relative(cwd, abs));
 
+/** Tests, fixtures, stories, e2e: never real pages. */
+export const NOISE_PATH = /(?:^|\/)(?:tests?|__tests__|__mocks__|fixtures?|e2e|cypress|stories|\.storybook)\/|\.(?:test|spec|stories)\.[a-z]+$/i;
+
 export function walk(cwd: string, ignore: string[], limit = 20000): string[] {
   const out: string[] = [];
   const rec = (dir: string) => {
@@ -18,7 +21,7 @@ export function walk(cwd: string, ignore: string[], limit = 20000): string[] {
       const abs = join(dir, e.name);
       const r = rel(cwd, abs);
       if (e.isDirectory()) { if (!SKIP_DIRS.has(e.name) && !matchesAny(ignore, r)) rec(abs); }
-      else if (e.isFile() && !matchesAny(ignore, r)) out.push(r);
+      else if (e.isFile() && !matchesAny(ignore, r) && !NOISE_PATH.test(r)) out.push(r);
     }
   };
   rec(cwd);

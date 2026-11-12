@@ -5,7 +5,7 @@ import { matchesAny } from "./glob.ts";
 import { type Finding, diffFile, isLayoutFile } from "./rules.ts";
 import { extractFacts, kindOf } from "./extract.ts";
 import { fileToRoute, isHomepage, isRedirectConfig, redirectCovers, redirectSources } from "./routes.ts";
-import { rel, readText, walk, SKIP_DIRS } from "./fs.ts";
+import { rel, readText, walk, SKIP_DIRS, NOISE_PATH } from "./fs.ts";
 import type { SeoLedger } from "./ledger.ts";
 
 const WATCHED_NAMES = /^(?:robots\.txt|sitemap\.xml|vercel\.json|netlify\.toml|_redirects)$/;
@@ -33,7 +33,7 @@ export function checkWrite(cwd: string, toolName: "edit" | "write", input: ToolI
   if (!input.path) return [];
   const abs = isAbsolute(input.path) ? input.path : resolve(cwd, input.path.replace(/^@/, ""));
   const r = rel(cwd, abs);
-  if (r.startsWith("..") || matchesAny(cfg.ignore, r) || r.split("/").some((s) => SKIP_DIRS.has(s)) || !isWatched(r)) return [];
+  if (r.startsWith("..") || matchesAny(cfg.ignore, r) || r.split("/").some((s) => SKIP_DIRS.has(s)) || NOISE_PATH.test(r) || !isWatched(r)) return [];
   const before = existsSync(abs) ? readText(abs) : null;
   let after: string | null;
   if (toolName === "write") after = input.content ?? "";

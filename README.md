@@ -2,13 +2,6 @@
 
 A [Pi](https://pi.dev) extension that stops the coding agent from silently wrecking your SEO. It diffs every `edit`/`write` of SEO-relevant files **before** it lands, blocks catastrophic changes, and feeds smaller regressions back to the agent so it fixes them in the same turn. Fully offline — no network, no API keys.
 
-## Demo
-
-<!-- TODO: replace with a recorded GIF -->
-![demo placeholder](docs/demo.gif)
-
-_GIF coming soon: agent adds `noindex` to the root layout → Pi asks for confirmation._
-
 ## Install
 
 ```bash

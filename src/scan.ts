@@ -80,6 +80,7 @@ export function scanProject(cwd: string, cfg: SeoGuardConfig): ScanResult {
       .map((a) => extractFacts(a, read(a))).filter(Boolean) as NonNullable<ReturnType<typeof extractFacts>>[];
     // ancestors found (Next nesting, Astro/Vue/Svelte imports) → trust them; none resolvable → fall back to any layout-like file
     const inherit = (key: "title" | "description" | "canonical") => frontLayout || (anc.length ? anc.some((x) => x[key] === "present") : layoutHas(key && key) && !next);
+    if (k === "vue" && /<template>\s*<(?:NuxtPage|RouterView|router-view)\b[^>]*\/?>(?:\s*<\/(?:NuxtPage|RouterView|router-view)>)?\s*<\/template>/.test(read(f))) continue; // pure parent-route wrapper
     if (/http-equiv\s*=\s*["']refresh|\bnavigateTo\(|\bredirect\(|Astro\.redirect\(|\bpermanentRedirect\(/.test(read(f))) continue; // redirect-only page
     if (facts.noindex || anc.some((x) => x.noindex)) continue; // not meant for search: no title/description expectations
     if (facts.title !== "present" && !inherit("title")) add("missing-title", f, `Route \`${route}\` has no title.`);

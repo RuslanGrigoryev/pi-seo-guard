@@ -210,3 +210,42 @@ describe("4. hreflang / JSON-LD / image dimensions", () => {
     expect(r("a.html", `<img width="1" height="1">`, `<img>`, off)).not.toContain("warn:img-dimensions-removed");
   });
 });
+
+describe("5. real-world tuning regressions", () => {
+  it("scan: canonical only expected when the project uses it; test dirs ignored; redirect-only pages skipped", () => {
+    put("app/layout.tsx", `export const metadata = { title: "S", description: "d" };`);
+    put("app/a/page.tsx", `export default () => <h1>x</h1>`);
+    put("app/__tests__/b/page.tsx", `export default () => null`);
+    expect(scanProject(dir, cfg).findings).toEqual([]);
+    put("src/pages/go.astro", `<meta http-equiv="refresh" content="0;URL=/">`);
+    expect(scanProject(dir, cfg).findings.filter((f) => f.file === "src/pages/go.astro")).toEqual([]);
+  });
+  it("scan: docs-only repo (no routes) reports no broken links", () => {
+    put("docs/a.md", "# A\n[x](/nope)");
+    expect(scanProject(dir, cfg).findings).toEqual([]);
+  });
+  it("static-asset redirect removal and headers() sources are not redirect-removed", () => {
+    const b = `module.exports = { redirects: { '/a.png': { redirect: '/a.webp' } } }`;
+    expect(r("nuxt.config.ts", b, `module.exports = {}`)).toEqual([]);
+    const n = `async headers() { return [{ source: '/(.*)', headers: [] }] }, async redirects() { return [{ source: '/old', destination: '/new' }] }`;
+    expect(r("next.config.js", n, n.replace(/async redirects[\s\S]*$/, "}"))).toEqual(["warn:redirect-removed"]);
+    expect(r("next.config.js", n, n.replace(/async headers\(\)[^,]*\]\s*\},/, ""))).toEqual([]);
+  });
+  it("delegating wrapper component keeps title/description", () => {
+    expect(r("app/head.tsx", `<><title>T</title></>`, `<MdxHead params={params} />`)).toEqual([]);
+  });
+  it("wildcard-heavy redirect source doesn't crash", () => {
+    put("nuxt.config.ts", `routeRules: { '/docs/3.x/examples/**': { redirect: '/x' } }`);
+    put("pages/a.vue", "<template><h1>x</h1></template>");
+    expect(() => scanProject(dir, cfg)).not.toThrow();
+  });
+  it("monorepo: apps/web/app/page.tsx is a route", async () => {
+    const { fileToRoute } = await import("../src/routes.ts");
+    expect(fileToRoute("apps/web/app/blog/page.tsx")?.route).toBe("/blog");
+    expect(fileToRoute("packages/ui/src/page.tsx")).toBeNull();
+  });
+  it("Nuxt pure <NuxtPage/> wrapper isn't missing a title", () => {
+    put("pages/enterprise.vue", "<template>\n  <NuxtPage />\n</template>");
+    expect(scanProject(dir, cfg).findings).toEqual([]);
+  });
+});

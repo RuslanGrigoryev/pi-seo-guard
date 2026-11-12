@@ -69,7 +69,7 @@ export function diffFile(rel: string, before: string | null, after: string, cfg:
   if (isRedirectConfig(rel)) {
     if (before) {
       const now = new Set(redirectSources(rel, after));
-      const gone = redirectSources(rel, before).filter((s) => !now.has(s));
+      const gone = redirectSources(rel, before).filter((s) => !now.has(s) && !/\.(?:png|jpe?g|gif|webp|avif|svg|ico|css|js|map|woff2?|pdf)$/i.test(s)); // static-asset redirects are noise
       if (gone.length) out.push(mk(cfg, "redirect-removed", rel, `Redirect rule(s) removed for: ${gone.slice(0, 5).join(", ")}${gone.length > 5 ? ", …" : ""} — old URLs will 404.`));
     }
     const xr = (s: string) => /x-robots-tag[^\n]{0,80}noindex/i.test(s);
@@ -92,7 +92,9 @@ export function diffFile(rel: string, before: string | null, after: string, cfg:
   if (lost("title")) out.push(mk(cfg, "title-removed", rel, `Title ${how("title")} (<title> / metadata.title / frontmatter title).`));
   if (lost("description")) out.push(mk(cfg, "description-removed", rel, `Meta description ${how("description")}.`));
   if (lost("canonical")) out.push(mk(cfg, "canonical-removed", rel, `Canonical link ${how("canonical")}.`));
-  if (a.noindex && !b.noindex) {
+  if (a.noindexProp && !b.noindexProp && !b.noindex && !ROOT_LAYOUT.test(rel) && !(isLayoutFile(rel) && /layout/i.test(basename(rel))))
+    out.push(mk(cfg, "component-noindex", rel, "`noindex` prop added to an SEO/layout component (<NextSeo noindex>, <SEO noindex>, <Layout noindex>) — this page will be dropped from search results."));
+  else if (a.noindex && !b.noindex) {
     const sitewide = ROOT_LAYOUT.test(rel) || (isLayoutFile(rel) && /layout/i.test(basename(rel)));
     out.push(sitewide
       ? mk(cfg, "sitewide-noindex", rel, "noindex added to a layout — applies to every page under it (site-wide de-indexing).")
@@ -101,6 +103,21 @@ export function diffFile(rel: string, before: string | null, after: string, cfg:
   if (a.nofollow && !b.nofollow) out.push(mk(cfg, "nofollow-added", rel, "nofollow added to robots meta — links on this page won't pass signals."));
   if (b.h1 > 0 && a.h1 === 0) out.push(mk(cfg, "h1-removed", rel, "No <h1> left in this file (it had one before)."));
   if (a.imgNoAlt > b.imgNoAlt) out.push(mk(cfg, "img-alt-removed", rel, `${a.imgNoAlt - b.imgNoAlt} more <img> without alt text than before.`));
+  if (b.hreflang.length) {
+    const now = new Set(a.hreflang);
+    const gone = b.hreflang.filter((x) => !now.has(x));
+    if (gone.length) {
+      const langs = [...new Set(gone.map((x) => x.split("|")[0]))];
+      const kept = new Set(a.hreflang.map((x) => x.split("|")[0]));
+      const removedLangs = langs.filter((l) => !kept.has(l));
+      out.push(mk(cfg, "hreflang-changed", rel, removedLangs.length
+        ? `hreflang alternate(s) removed: ${removedLangs.slice(0, 6).join(", ")}${removedLangs.length > 6 ? ", …" : ""}.`
+        : `hreflang alternate URL(s) changed for: ${langs.slice(0, 6).join(", ")}.`));
+    }
+  }
+  if (a.jsonLd < b.jsonLd) out.push(mk(cfg, "jsonld-removed", rel, `${b.jsonLd - a.jsonLd} JSON-LD structured-data block(s) removed.`));
+  if (a.jsonLdInvalid > b.jsonLdInvalid) out.push(mk(cfg, "jsonld-invalid", rel, "A JSON-LD block is no longer valid JSON — search engines will ignore it."));
+  if (a.imgNoDim > b.imgNoDim) out.push(mk(cfg, "img-dimensions-removed", rel, `${a.imgNoDim - b.imgNoDim} more <img>/<Image> without width+height than before (layout shift / CLS).`));
   return out.filter(Boolean) as Finding[];
 }
 

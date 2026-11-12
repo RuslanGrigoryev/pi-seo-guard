@@ -5,7 +5,8 @@ import { matchesAny } from "./glob.ts";
 import { type Finding, diffFile, isLayoutFile } from "./rules.ts";
 import { extractFacts, kindOf } from "./extract.ts";
 import { fileToRoute, isHomepage, isRedirectConfig, redirectCovers, redirectSources } from "./routes.ts";
-import { rel, readText, walk, SKIP_DIRS } from "./fs.ts";
+import { rel, readText, walk, SKIP_DIRS, NOISE_PATH } from "./fs.ts";
+import type { SeoLedger } from "./ledger.ts";
 
 const WATCHED_NAMES = /^(?:robots\.txt|sitemap\.xml|vercel\.json|netlify\.toml|_redirects)$/;
 
@@ -28,11 +29,11 @@ export function applyEdits(before: string, edits: { oldText: string; newText: st
 }
 
 /** Pre-execution check for `edit` / `write`. */
-export function checkWrite(cwd: string, toolName: "edit" | "write", input: ToolInput, cfg: SeoGuardConfig): Finding[] {
+export function checkWrite(cwd: string, toolName: "edit" | "write", input: ToolInput, cfg: SeoGuardConfig, ledger?: SeoLedger): Finding[] {
   if (!input.path) return [];
   const abs = isAbsolute(input.path) ? input.path : resolve(cwd, input.path.replace(/^@/, ""));
   const r = rel(cwd, abs);
-  if (r.startsWith("..") || matchesAny(cfg.ignore, r) || r.split("/").some((s) => SKIP_DIRS.has(s)) || !isWatched(r)) return [];
+  if (r.startsWith("..") || matchesAny(cfg.ignore, r) || r.split("/").some((s) => SKIP_DIRS.has(s)) || NOISE_PATH.test(r) || !isWatched(r)) return [];
   const before = existsSync(abs) ? readText(abs) : null;
   let after: string | null;
   if (toolName === "write") after = input.content ?? "";
@@ -41,7 +42,8 @@ export function checkWrite(cwd: string, toolName: "edit" | "write", input: ToolI
     after = applyEdits(before, input.edits);
   }
   if (after === null) return [];
-  return diffFile(r, before, after, cfg);
+  const found = diffFile(r, before, after, cfg);
+  return ledger ? ledger.observe(cwd, r, after, found) : found;
 }
 
 // ---- bash: file deletion / rename ----
@@ -127,3 +129,40 @@ export function unredirectedRemovals(cwd: string, removals: PendingRouteRemoval[
 }
 
 export { isLayoutFile, extractFacts };
+
+// ---- bash: route snapshot diff (globs, find -delete, rimraf, scripts…) ----
+
+export type RouteSnapshot = Map<string, string>; // route -> file
+
+/** Snapshot every route file currently on disk. Used before/after each bash call. */
+export function snapshotRoutes(cwd: string, cfg: SeoGuardConfig): RouteSnapshot {
+  const snap: RouteSnapshot = new Map();
+  for (const f of walk(cwd, cfg.ignore)) {
+    const info = fileToRoute(f);
+    if (info && !snap.has(info.route)) snap.set(info.route, f);
+  }
+  return snap;
+}
+
+/** Routes in `before` that are gone in `after`. */
+export function diffSnapshots(before: RouteSnapshot, after: RouteSnapshot): PendingRouteRemoval[] {
+  const out: PendingRouteRemoval[] = [];
+  for (const [route, file] of before) if (!after.has(route)) out.push({ file, route });
+  return out;
+}
+
+/** Findings for a bash call given before/after snapshots. Homepage → after-the-fact critical message (it already happened). */
+export function snapshotRemovalFindings(cwd: string, before: RouteSnapshot, cfg: SeoGuardConfig, already: PendingRouteRemoval[] = []): Finding[] {
+  const gone = diffSnapshots(before, snapshotRoutes(cwd, cfg));
+  if (!gone.length) return [];
+  const out: Finding[] = [];
+  const handled = new Set(already.map((r) => r.route));
+  const hp = gone.find((r) => isHomepage(r.route));
+  if (hp && !handled.has("/") && severityOf(cfg, "homepage-removed") !== "off") {
+    out.push({ rule: "homepage-removed", severity: severityOf(cfg, "homepage-removed") as "critical" | "warn", file: hp.file,
+      message: "The homepage route (`/`) was DELETED by this command and it could not be blocked beforehand. RESTORE IT NOW (e.g. `git checkout -- " + hp.file + "`) unless the user explicitly asked for this." });
+  }
+  const rest = gone.filter((r) => !isHomepage(r.route) && !handled.has(r.route));
+  out.push(...unredirectedRemovals(cwd, rest, cfg));
+  return out;
+}

@@ -1,9 +1,10 @@
 import { resolve } from "node:path";
 import { type SeoGuardConfig, severityOf } from "./config.ts";
 import { matchesAny } from "./glob.ts";
-import { type Finding, sitemapLocs } from "./rules.ts";
+import { type Finding, isLayoutFile, sitemapLocs } from "./rules.ts";
 import { extractFacts, kindOf } from "./extract.ts";
 import { fileToRoute, isDynamic, isRedirectConfig, matchesRoute, normalizePath, redirectCovers, redirectSources } from "./routes.ts";
+import { ancestorsOf } from "./inherit.ts";
 import { gitHeadFiles, readText, walk } from "./fs.ts";
 
 export interface ScanResult { findings: Finding[]; routes: number; filesScanned: number; notes: string[] }
@@ -57,6 +58,14 @@ export function scanProject(cwd: string, cfg: SeoGuardConfig): ScanResult {
 
   // 1. metadata per page
   const layoutFacts = files.filter((f) => /layout|BaseHead|Head|Seo/i.test(f) && kindOf(f)).map((f) => extractFacts(f, read(f))).filter(Boolean);
+  // canonical is optional: only expect it per page when the project uses it somewhere
+  const canonicalConvention = (() => {
+    // canonical is optional: expect it per page only when most pages (or a layout) declare it
+    const pages = [...routes.values()].filter((f) => { const k = kindOf(f); return k && k !== "script"; });
+    const withCanon = pages.filter((f) => extractFacts(f, read(f))?.canonical === "present").length;
+    const inLayout = files.some((f) => isLayoutFile(f) && extractFacts(f, read(f))?.canonical === "present");
+    return inLayout || (pages.length > 0 && withCanon / pages.length >= 0.5);
+  })();
   const layoutHas = (k: "title" | "description" | "canonical") => layoutFacts.some((x) => x![k] === "present");
   for (const [route, f] of routes) {
     if (isDynamic(route) && /\.(?:[jt]sx?)$/.test(f) && !/generateMetadata|metadata/.test(read(f))) { /* still check below */ }
@@ -66,17 +75,27 @@ export function scanProject(cwd: string, cfg: SeoGuardConfig): ScanResult {
     if (!facts) continue;
     const frontLayout = k === "md" && /^---[\s\S]*?\blayout\s*:/m.test(read(f));
     const next = /^(?:src\/)?(?:app|pages)\//.test(f);
-    const inherit = (key: "title" | "description" | "canonical") => frontLayout || layoutHas(key) || (next && key === "canonical" && layoutHas(key));
+    const fileSet = new Set(files);
+    const anc = ancestorsOf(f, read(f), (r) => fileSet.has(r), (r) => (fileSet.has(r) ? read(r) : null))
+      .map((a) => extractFacts(a, read(a))).filter(Boolean) as NonNullable<ReturnType<typeof extractFacts>>[];
+    // ancestors found (Next nesting, Astro/Vue/Svelte imports) → trust them; none resolvable → fall back to any layout-like file
+    const inherit = (key: "title" | "description" | "canonical") => frontLayout || (anc.length ? anc.some((x) => x[key] === "present") : layoutHas(key && key) && !next);
+    if (k === "vue" && /<template>\s*<(?:NuxtPage|RouterView|router-view)\b[^>]*\/?>(?:\s*<\/(?:NuxtPage|RouterView|router-view)>)?\s*<\/template>/.test(read(f))) continue; // pure parent-route wrapper
+    if (/http-equiv\s*=\s*["']refresh|\bnavigateTo\(|\bredirect\(|Astro\.redirect\(|\bpermanentRedirect\(/.test(read(f))) continue; // redirect-only page
+    if (facts.noindex || anc.some((x) => x.noindex)) continue; // not meant for search: no title/description expectations
     if (facts.title !== "present" && !inherit("title")) add("missing-title", f, `Route \`${route}\` has no title.`);
     if (facts.description !== "present" && !inherit("description")) add("missing-description", f, `Route \`${route}\` has no meta description.`);
-    if (facts.canonical !== "present" && !inherit("canonical")) add("missing-canonical", f, `Route \`${route}\` has no canonical link.`);
+    if (canonicalConvention && facts.canonical !== "present" && !inherit("canonical")) add("missing-canonical", f, `Route \`${route}\` has no canonical link.`);
   }
 
-  // 2. broken internal links
+  // 2. broken internal links (needs a route table: without one — e.g. a docs-only repo — every link would be "broken")
+  if (routes.size === 0) notes.push("No file-based routes found; broken-link check skipped.");
   const seenBroken = new Set<string>();
-  for (const f of files) {
+  for (const f of routes.size === 0 ? [] : files) {
     const k = kindOf(f);
     if (!k || k === "script") continue;
+    // markdown that isn't itself a page is a content-collection entry: its routes come from a catch-all/CMS we can't enumerate
+    if (k === "md" && !fileToRoute(f)) continue;
     for (const href of extractLinks(read(f), k)) {
       const p = internalPath(href, cfg.baseUrl);
       if (!p || p.startsWith("/api/")) continue;

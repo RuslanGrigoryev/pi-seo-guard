@@ -1,6 +1,6 @@
 {
   "name": "pi-seo-guard",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Pi coding-agent extension that guards SEO-critical markup, robots.txt, sitemaps, routes and redirects while the agent edits your site",
   "keywords": [
     "pi-package",

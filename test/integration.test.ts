@@ -146,3 +146,26 @@ describe("extension wiring (mock Pi API)", () => {
   });
   it("registers /seo-guard", () => expect(setup(true).cmds["seo-guard"].handler).toBeTypeOf("function"));
 });
+
+describe("bash writes through the extension", () => {
+  it("sed -i on robots.txt: headless fails closed, UI asks, decline blocks", async () => {
+    put("public/robots.txt", "User-agent: *\nAllow: /\n");
+    const mk = (hasUI: boolean, ans = false) => {
+      const handlers: Record<string, Function> = {};
+      seoGuard({ on: (e: string, h: Function) => (handlers[e] = h), registerCommand: () => {}, sendMessage: () => {} } as any);
+      const asked: string[] = [];
+      return { handlers, asked, ctx: { cwd: dir, hasUI, ui: { confirm: async (_t: string, m: string) => { asked.push(m); return ans; }, notify: () => {} } } };
+    };
+    const ev = { type: "tool_call", toolName: "bash", toolCallId: "b1", input: { command: "sed -i 's/Allow: \\//Disallow: \\//' public/robots.txt" } };
+    const h = mk(false);
+    const r = await h.handlers.tool_call(ev, h.ctx);
+    expect(r.block).toBe(true); expect(r.reason).toMatch(/robots-disallow-all/);
+    const u = mk(true, false);
+    expect((await u.handlers.tool_call(ev, u.ctx)).block).toBe(true);
+    expect(u.asked).toHaveLength(1);
+    const y = mk(true, true);
+    expect(await y.handlers.tool_call(ev, y.ctx)).toBeUndefined();
+    const safe = mk(false);
+    expect(await safe.handlers.tool_call({ ...ev, input: { command: "cat public/robots.txt && grep Allow public/robots.txt" } }, safe.ctx)).toBeUndefined();
+  });
+});

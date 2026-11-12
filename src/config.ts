@@ -7,6 +7,7 @@ export const DEFAULT_SEVERITIES = {
   "sitewide-noindex": "critical",
   "robots-disallow-all": "critical",
   "homepage-removed": "critical",
+  "unverifiable-critical-write": "critical",
   "title-removed": "warn",
   "description-removed": "warn",
   "canonical-removed": "warn",
@@ -17,6 +18,7 @@ export const DEFAULT_SEVERITIES = {
   "route-removed": "warn",
   "redirect-removed": "warn",
   "sitemap-urls-removed": "warn",
+  "unverifiable-write": "warn",
   // /seo-guard only
   "broken-link": "warn",
   "sitemap-missing-route": "warn",

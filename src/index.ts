@@ -2,6 +2,7 @@ import { type ExtensionAPI, isToolCallEventType } from "@earendil-works/pi-codin
 import { loadConfig } from "./config.ts";
 import { type Finding, formatFindings } from "./rules.ts";
 import { checkWrite, criticalRemovalFindings, routeRemovalsFromBash, unredirectedRemovals, type PendingRouteRemoval } from "./guard.ts";
+import { bashWriteFindings } from "./bashwrite.ts";
 import { formatScan, scanProject } from "./scan.ts";
 
 export default function seoGuard(pi: ExtensionAPI) {
@@ -22,7 +23,7 @@ export default function seoGuard(pi: ExtensionAPI) {
     else if (isToolCallEventType("bash", event)) {
       const removals = routeRemovalsFromBash(ctx.cwd, event.input.command ?? "", config);
       if (removals.length) pendingRemovals.set(event.toolCallId, removals);
-      findings = criticalRemovalFindings(removals, config);
+      findings = [...criticalRemovalFindings(removals, config), ...bashWriteFindings(ctx.cwd, event.input.command ?? "", config)];
     } else return;
 
     const critical = findings.filter((f) => f.severity === "critical");

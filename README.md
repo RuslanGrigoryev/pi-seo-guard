@@ -28,6 +28,7 @@ pi -e npm:pi-seo-guard
 | `sitewide-noindex` | critical | `noindex` added to a root layout / `app.html` / `_document`, or an `X-Robots-Tag: noindex` header added in vercel.json / netlify.toml / next.config |
 | `robots-disallow-all` | critical | `robots.txt` where `User-agent: *` has `Disallow: /` (and no `Allow: /`) |
 | `homepage-removed` | critical | `rm` / `mv` / `git rm` / `git mv` of the homepage route file (via the `bash` tool) |
+| `unverifiable-critical-write` | critical | a `bash` command writes to `robots.txt` or the root layout in a way the guard can't simulate (see below) |
 | `title-removed` | warn | `<title>`, Next `metadata.title`, Nuxt `useHead`, or frontmatter `title` removed or emptied |
 | `description-removed` | warn | meta description removed or emptied |
 | `canonical-removed` | warn | canonical link / `alternates.canonical` removed |
@@ -38,8 +39,13 @@ pi -e npm:pi-seo-guard
 | `route-removed` | warn | route file deleted/renamed (Next app+pages, Astro, SvelteKit, Nuxt) with no matching redirect |
 | `redirect-removed` | warn | redirect rule removed from vercel.json, netlify.toml, `_redirects`, next/astro config |
 | `sitemap-urls-removed` | warn | URLs dropped from `sitemap.xml` |
+| `unverifiable-write` | warn | a `bash` command writes to another watched file (sitemap, redirects, page/layout) in a way the guard can't simulate |
 
 `/seo-guard` additionally uses: `broken-link`, `sitemap-missing-route`, `missing-title`, `missing-description`, `missing-canonical` (all warn).
+
+### Writes through `bash`
+
+Since 0.1.1 the guard also looks at shell commands that modify watched SEO files: `sed -i` / `sed -i.bak` / `perl -pi -e` (simple `s///` is applied in JS), `>` / `>>` redirects of `echo` / `printf` / `cat` / heredocs, `tee [-a]`, `cp` / `mv` onto a watched file, `truncate`, and `bash -c '…'` wrappers. When the result can be computed it goes through the normal rules (e.g. `sed -i 's/Allow/Disallow/' robots.txt` → `robots-disallow-all`). When it can't (complex sed, `$VAR`, command output, scripts), a write to `robots.txt` or the root layout asks for confirmation (headless: blocked), and other watched files get a WARN. Reads (`cat`, `grep`, `sed -n`, `sed` without `-i`) and writes to unwatched paths never trigger.
 
 ## `/seo-guard`
 
@@ -80,6 +86,7 @@ Invalid JSON falls back to defaults with a warning.
 - Route deletion is detected for **bash** `rm`/`mv`/`git rm`/`git mv` with literal paths — not globs, `$(…)`, scripts, or `find -delete`.
 - Redirect parsing for `next.config.*`/`astro.config.*` is regex-based on `source:` / path keys.
 - Sitemaps generated at build time (`next-sitemap`, `@astrojs/sitemap`) can't be checked; `/seo-guard` says so.
+- Bash write detection is best-effort shell parsing: no variable expansion, globs, `$(…)`, or scripts run via `python`/`node` that write files themselves (those are only caught if they redirect into a watched file). `sed`/`perl` support covers plain `s///` substitutions.
 - Only checks what the agent does through Pi's `edit`, `write`, `bash` tools; it is not a build-time linter.
 
 ## Development

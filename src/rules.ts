@@ -14,6 +14,8 @@ const LAYOUT_RE = /(^|\/)(layout\.[jt]sx?|_document\.[jt]sx?|_app\.[jt]sx?|\+lay
 export const isLayoutFile = (rel: string) => LAYOUT_RE.test(rel);
 const ROOT_LAYOUT = /^(?:src\/)?app\/layout\.[jt]sx?$|^(?:src\/)?pages\/_(?:document|app)\.[jt]sx?$|^src\/routes\/\+layout\.svelte$|^src\/app\.html$/;
 
+export const isRootLayout = (rel: string) => ROOT_LAYOUT.test(rel);
+
 function mk(cfg: SeoGuardConfig, rule: RuleId, file: string, message: string): Finding | null {
   const severity = severityOf(cfg, rule);
   return severity === "off" ? null : { rule, severity, file, message };

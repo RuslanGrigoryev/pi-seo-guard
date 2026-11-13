@@ -75,13 +75,18 @@ Scans the project (offline) and reports:
 
 The report is shown in the UI and queued as a hidden message for the agent's next turn.
 
-## Config — `.pi/seo-guard.json`
+## Config
+
+Two locations, merged (`.seo-guard.json` wins on conflicts; `ignore` lists concatenate): the original **`.pi/seo-guard.json`** and the tool-agnostic **`.seo-guard.json`** at the project root (also what the CLI / GitHub Action reads).
 
 ```json
 {
   "baseUrl": "https://example.com",
   "snapshotRoutes": true,
-  "ignore": ["legacy/**", "**/*.stories.tsx", "public/vendor/**"],
+  "ignore": [
+    "legacy/**",
+    { "rule": "noindex-added", "routes": ["/staging/*"], "paths": ["app/(internal)/**"] }
+  ],
   "rules": {
     "h1-removed": "off",
     "title-removed": "critical",
@@ -90,16 +95,68 @@ The report is shown in the UI and queued as a hidden message for the agent's nex
 }
 ```
 
-- `ignore` — globs (`*`, `**`, `?`, `{a,b}`) relative to project root. `node_modules`, `.git`, build dirs are always skipped.
+- `ignore` strings — globs (`*`, `**`, `?`, `{a,b}`) relative to project root that the guard never looks at. `node_modules`, `.git`, build dirs are always skipped.
+- `ignore` objects — **allow-list**: drop findings that match. `rule` is optional (omitted = every non-critical rule); `routes` are globs on the page's route (`/staging/*` covers the subtree), `paths` are globs on the file path. If both are given, either matching suppresses. An entry with only `rule` ignores that rule everywhere. Unknown rule names are discarded (never widened to "all rules").
 - `rules` — per rule: `"critical"`, `"warn"` or `"off"`.
 - `baseUrl` — absolute links/sitemap `<loc>` under this URL are treated as internal.
 
 Invalid JSON falls back to defaults with a warning.
 
+### Inline ignores
+
+Suppress findings for one file with a comment anywhere in it:
+
+```html
+<!-- seo-guard-ignore noindex-added -->
+```
+```tsx
+// seo-guard-ignore title-removed, h1-removed
+{/* seo-guard-ignore */}
+```
+
+Config entries and inline comments apply to edit-time checks, the CLI and `/seo-guard`.
+
+**Critical rules need an explicit name.** A bare `// seo-guard-ignore` or a rule-less config entry suppresses only *non-critical* rules. `sitewide-noindex`, `robots-disallow-all`, `homepage-removed`, `component-noindex` and `unverifiable-critical-write` guard against de-indexing the whole site, so a wildcard (easy to paste by accident, or for an agent to add just to get past the guard) must never silence them — you have to write e.g. `// seo-guard-ignore sitewide-noindex` or `{"rule": "robots-disallow-all", "paths": ["public/robots.txt"]}`, which is a deliberate, reviewable decision.
+
+## CLI / CI (`pi-seo-guard`)
+
+Runs the same rules without Pi (no Pi install needed):
+
+```bash
+npx pi-seo-guard check --base origin/main              # diff working tree vs a git ref
+npx pi-seo-guard check --format github --fail-on warn  # annotations, stricter gate
+npx pi-seo-guard scan                                  # full scan (like /seo-guard)
+```
+
+- `check [--base <ref>] [--format text|json|github] [--fail-on critical|warn|none]` — compares the working tree (incl. untracked files) with the merge-base of `<ref>` and `HEAD` (default `HEAD`; in GitHub PR runs `origin/$GITHUB_BASE_REF`). Old content comes from `git show <ref>:<path>`; added, deleted and renamed files are handled (a deleted/renamed route without a redirect is `route-removed`, the homepage is `homepage-removed`).
+- `--format github` prints `::error file=…,line=…::` (critical) / `::warning` (warn) annotations; `json` prints machine-readable findings.
+- Exit code: `1` when a finding at/above `--fail-on` exists (default `critical`), `2` on usage/git errors, else `0`.
+- `.seo-guard.json` / `.pi/seo-guard.json` (rules, ignore) are honoured.
+
+### GitHub Action
+
+```yaml
+# .github/workflows/seo-guard.yml
+name: SEO guard
+on: pull_request
+jobs:
+  seo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }      # needed to read the base branch
+      - uses: RuslanGrigoryev/pi-seo-guard@v0.4.0
+        with:
+          fail-on: critical           # critical | warn | none
+          # base: origin/main         # default: the PR base branch
+```
+
+Or without the Action: `- run: npx --yes pi-seo-guard@0.4.0 check --format github`.
+
 ## Limits
 
-- **Parsing is lenient, not semantic.** HTML/Astro/Vue/Svelte/JSX go through [htmlparser2](https://github.com/fb55/htmlparser2); Next/Nuxt metadata and frontmatter use **regex** on literal values. Computed titles (`title: getTitle()`) count as "present"; dynamic `generateMetadata` bodies are only skimmed.
-- SEO components are recognised by name (`NextSeo`, `SEO`, `Seo`, `Head`, `Meta`, `*Head`, `*Seo`, Astro `*Layout`); title passed via variables counts as present.
+- **Parsing is lenient, not semantic.** HTML/Astro/Vue/Svelte/JSX go through [htmlparser2](https://github.com/fb55/htmlparser2); Next/Nuxt metadata and frontmatter use **regex**. Titles/descriptions set through indirection are followed since 0.4: same-file `const`s and object properties (`const title = "X"`, `siteConfig.title`), values imported from a relative module or a tsconfig/jsconfig `paths` alias (`@/config/site`, one hop, `const`/`export default` objects), `a || b` fallbacks, and one level of wrapper components that forward props to `<title>`/an SEO component/`useSeoMeta`. If the value resolves to empty/`undefined`/a missing property after an edit, it is reported like a literal removal. Anything else (function calls, `let`/reassigned variables, spreads, package imports, re-exports, props from data) stays "unknown" → counts as present, no finding.
+- SEO components are recognised by name (`NextSeo`, `SEO`, `Seo`, `Head`, `Meta`, `*Head`, `*Seo`, Astro `*Layout`).
 - Layout inheritance only looks at files edited **in this session** (ledger) and resolvable imports/conventional ancestors; it can't see a title set by a layout in another package.
 - Route-deletion snapshots walk the project twice per bash call (disable with `"snapshotRoutes": false` on huge repos). Routes removed *after the fact* can't be blocked, only reported.
 - JSON-LD validity is only judged for literal (non-templated) blocks.

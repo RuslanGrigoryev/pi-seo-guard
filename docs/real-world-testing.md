@@ -42,4 +42,22 @@ Caveat: 0 FPs on 3 144 edits is a good sign but not proof — the replay only co
 
 ## Mutation sanity check (true-positive side)
 
-`scripts/mutate.ts` deletes the first `title` of every page and checks `title-removed` fires: commerce 4/4, astro.build 13/18, taxonomy 8/13, ui 8/12, nuxt.com 3/28, leerob.io 0/3. This mutator is crude (it removes one of several `title:` occurrences or edits `const title = …` that feeds a variable, which legitimately leaves the title "present"), so these are **lower bounds**, not a recall measurement. Known blind spots: titles via variables/`seoTitle` indirection (counted as present on both sides), MDX files that put the title in an `export const metadata` inside `.mdx`.
+`scripts/mutate.ts <repo>` applies two mutations to every route page and checks `title-removed` fires:
+
+- **literal** — delete the first literal title (`<title>`, `title:`, `title=`).
+- **indirect** (added in 0.4, #15) — blank the initialiser of `const title = …` / `const seoTitle = …`, i.e. the title is lost *through a variable*.
+
+Detected / mutated, before (v0.3.0 logic) → after (v0.4.0, indirection resolver):
+
+| Repo | Literal before → after | Indirect before → after |
+|---|---|---|
+| vercel/commerce | 4/4 → 4/4 | – (no such pages) |
+| shadcn-ui/taxonomy | 8/13 → 8/13 | – |
+| shadcn-ui/ui | 8/12 → 8/12 | 0/7 → 3/7 |
+| leerob/leerob.io | 0/3 → **3/3** | – |
+| withastro/astro.build | 13/18 → 13/18 | 0/2 → 2/2 |
+| nuxt/nuxt.com | 3/28 → **5/28** | 0/25 → **20/25** |
+
+nuxt.com's baseline 3/28 is mostly the crude mutator (many pages have `title` in several places or take it from content data: `pageData.value.title`, which is deliberately "unknown"). Gains: leerob.io's `.mdx` pages keep the title in `export const metadata` (now read), and nuxt.com `useSeoMeta({ title })` shorthand/`title: seoTitle` now resolve through `const`s. The `useHead`/`useSeoMeta` region is also the call's own argument list now, so a neighbouring `defineOgImage({ title })` no longer masks a removed title. Remaining misses are unresolvable on purpose (`const title = data.value.title`, function calls, `props` from CMS data, templates mixing unresolved parts) — no finding rather than a false positive. These are still lower bounds, not a recall measurement.
+
+Replay (v0.4.0 vs v0.3.0 on the same repos, last 100 commits touching SEO files; commerce 184 file edits, taxonomy 339, ui 5, leerob.io 41, astro.build 3, nuxt.com 148 = 720 file edits): identical findings — the one TP (`/password` redirect removed in commerce `next.config.js`) and **0 FPs**; `/seo-guard` scan findings unchanged (ui: 5, others 0). The clones here are depth-40, so the replay window is smaller than the v0.2 run (3 144 edits).

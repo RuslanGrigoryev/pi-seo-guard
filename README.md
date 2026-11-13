@@ -38,7 +38,7 @@ pi -e npm:pi-seo-guard
 | `h1-removed` | warn | file had an `<h1>` / `# Heading` and now has none |
 | `img-alt-removed` | warn | more `<img>` / `![]()` without alt than before |
 | `route-removed` | warn | route file deleted/renamed (Next app+pages, Astro, SvelteKit, Nuxt) with no matching redirect — also via globs, `find -delete`, `git rm -r`, `rimraf`, node/python scripts (route list is snapshotted around each bash call) |
-| `redirect-removed` | warn | redirect rule removed from vercel.json, netlify.toml, `_redirects`, next/astro config |
+| `redirect-removed` | warn | redirect rule removed from vercel.json, netlify.toml, `_redirects`, firebase.json, nginx, `.htaccess`, next/astro/nuxt/docusaurus config, SvelteKit `hooks.server` (simple forms) |
 | `sitemap-urls-removed` | warn | URLs dropped from `sitemap.xml` |
 | `hreflang-changed` | warn | hreflang alternates removed or their URL changed (`<link rel=alternate hreflang>`, Next `alternates.languages`) |
 | `jsonld-removed` | warn | a JSON-LD block (`<script type="application/ld+json">`, `<ProductJsonLd/>`-style component) removed |
@@ -103,7 +103,7 @@ Invalid JSON falls back to defaults with a warning.
 - Layout inheritance only looks at files edited **in this session** (ledger) and resolvable imports/conventional ancestors; it can't see a title set by a layout in another package.
 - Route-deletion snapshots walk the project twice per bash call (disable with `"snapshotRoutes": false` on huge repos). Routes removed *after the fact* can't be blocked, only reported.
 - JSON-LD validity is only judged for literal (non-templated) blocks.
-- Redirect parsing for `next.config.*`/`astro.config.*` is regex-based on `source:` / path keys.
+- Redirect parsing for `next.config.*`/`astro.config.*`/`docusaurus.config.*` is regex-based on `source:` / path / `from:` keys. SvelteKit `hooks.server` is only understood for `event.url.pathname === '/x'` + `redirect()` and literal redirect maps; arbitrary logic is skipped. nginx/Apache support covers single-line `rewrite`/`Redirect*`/`RewriteRule … [R]` and simple `location … { return 30x }` blocks (no `if`, maps or includes).
 - Sitemaps generated at build time (`next-sitemap`, `@astrojs/sitemap`) can't be checked; `/seo-guard` says so.
 - Bash write detection is best-effort shell parsing: no variable expansion, globs, `$(…)`, or scripts run via `python`/`node` that write files themselves (those are only caught if they redirect into a watched file). `sed`/`perl` support covers plain `s///` substitutions.
 - Only checks what the agent does through Pi's `edit`, `write`, `bash` tools; it is not a build-time linter.

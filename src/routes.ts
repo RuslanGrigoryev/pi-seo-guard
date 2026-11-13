@@ -57,9 +57,12 @@ export const isHomepage = (route: string) => route === "/";
 export const isDynamic = (route: string) => /[:*]/.test(route);
 
 export function routeToRegExp(route: string): RegExp {
+  try { return routeToRegExpUnsafe(route); } catch { return /(?!)/; }
+}
+function routeToRegExpUnsafe(route: string): RegExp {
   route = route.replace(/\*{2,}/g, "*");
   const optionalRoot = route.endsWith("/*") ? route.slice(0, -2) || "/" : null; // optional catch-all also matches its parent
-  if (optionalRoot) return new RegExp(`^(?:${routeToRegExp(optionalRoot).source.slice(1, -1)}|${routeToRegExp(route.replace(/\/\*$/, "/\u0000")).source.slice(1, -1).replace("\u0000", ".+")})$`);
+  if (optionalRoot) return new RegExp(`^(?:${routeToRegExpUnsafe(optionalRoot).source.slice(1, -1)}|${routeToRegExpUnsafe(route.replace(/\/\*$/, "/\u0000")).source.slice(1, -1).replace("\u0000", ".+")})$`);
   const src = route.split("/").map((s) => (s === "*" ? ".*" : s.startsWith(":") ? "[^/]+" : s.replace(/[.+^${}()|[\]\\]/g, "\\$&"))).join("/");
   try { return new RegExp("^" + src + "$"); } catch { return /(?!)/; }
 }
@@ -79,26 +82,102 @@ export function matchesRoute(routes: Iterable<string>, path: string): boolean {
 
 // ---- redirects ----
 
-const REDIRECT_FILES = /^(?:vercel\.json|netlify\.toml|_redirects|(?:next|astro|nuxt)\.config\.(?:js|mjs|cjs|ts|mts))$/;
-export const isRedirectConfig = (rel: string) => REDIRECT_FILES.test(basename(rel)) || /(^|\/)public\/_redirects$/.test(rel);
+const REDIRECT_FILES = /^(?:vercel\.json|netlify\.toml|_redirects|firebase\.json|\.htaccess|nginx\.conf|[\w.-]*\.nginx(?:\.conf)?|(?:next|astro|nuxt|docusaurus)\.config\.(?:js|mjs|cjs|ts|mts)|hooks\.server\.(?:js|ts|mjs|mts))$/;
+export const isRedirectConfig = (rel: string) =>
+  REDIRECT_FILES.test(basename(rel)) || /(^|\/)public\/_redirects$/.test(rel) || /(^|\/)(?:nginx|conf\.d|sites-(?:available|enabled))\/[^/]+\.conf$/.test(rel);
 
-/** Extract redirect *source* paths from a redirect config file. Best-effort. */
+/** Convert a (simple) regex path pattern to our route-pattern syntax, or null if too complex. */
+export function regexToRoute(re: string): string | null {
+  try {
+    let s = re.trim().replace(/^\(\?i\)/, "").replace(/^\^/, "").replace(/\$$/, "");
+    s = s.replace(/\/\?$/, "").replace(/\(\/\)\?$/, "");
+    s = s.replace(/\((?:\?:)?\.[*+]\??\)/g, "*").replace(/\((?:\?:)?(?:\[\^\/\]|\[\\?[\w\-0-9a-zA-Z]+\]|\\[dw])[+*]\??\)/g, ":p");
+    s = s.replace(/\.[*+]\??$/, "*").replace(/\\([.\-/_~])/g, "$1");
+    if (/[()|\\?+{}[\]^$]/.test(s.replace(/\*/g, ""))) return null;
+    if (!s.startsWith("/")) s = "/" + s;
+    return s.replace(/\*{2,}/g, "*").replace(/\/+$/, "") || "/";
+  } catch { return null; }
+}
+
+function expandBraces(g: string): string[] {
+  const m = /\{([^{}]*)\}/.exec(g);
+  if (!m) return [g];
+  return m[1].split(",").flatMap((alt) => expandBraces(g.slice(0, m.index) + alt + g.slice(m.index + m[0].length)));
+}
+
+/** Path of a redirect source: strips scheme+host and query string. */
+function srcPath(t: string): string {
+  t = t.replace(/^https?:\/\/[^/\s]+/i, "");
+  return t.split(/[?#]/)[0];
+}
+
+/** Extract redirect *source* paths from a redirect config file. Best-effort; never throws. */
 export function redirectSources(file: string, content: string): string[] {
-  const name = basename(file);
   const out = new Set<string>();
-  const add = (s: string) => { if (s.startsWith("/")) out.add(s.replace(/:(\w+)\*/g, "*").replace(/\/:path\*/g, "/*")); };
+  const add = (s: unknown) => {
+    if (typeof s !== "string" || !s.startsWith("/")) return;
+    out.add(s.replace(/:(\w+)\*/g, "*").replace(/\/:path\*/g, "/*").replace(/\*{2,}/g, "*"));
+  };
+  try { collect(basename(file), content, add); } catch { /* best-effort */ }
+  return [...out];
+}
+
+function collect(name: string, content: string, add: (s: unknown) => void): void {
   if (name === "_redirects") {
     for (const line of content.split(/\r?\n/)) {
       const t = line.trim();
-      if (t && !t.startsWith("#")) add(t.split(/\s+/)[0]);
+      if (!t || t.startsWith("#")) continue;
+      add(srcPath(t.split(/\s+/)[0])); // `/a /b 301!`, `/blog/* /news/:splat`, `/p/:id /q/:id`, `https://host/a /b`
     }
   } else if (name === "netlify.toml") {
-    for (const m of content.matchAll(/^\s*from\s*=\s*["']([^"']+)["']/gm)) add(m[1]);
+    for (const m of content.matchAll(/^\s*from\s*=\s*["']([^"']+)["']/gm)) add(srcPath(m[1]));
   } else if (name === "vercel.json") {
     try {
       const j = JSON.parse(content);
       for (const r of [...(j.redirects ?? []), ...(j.rewrites ?? [])]) if (typeof r?.source === "string") add(r.source);
     } catch { for (const m of content.matchAll(/"source"\s*:\s*"([^"]+)"/g)) add(m[1]); }
+  } else if (name === "firebase.json") {
+    let list: unknown[] = [];
+    try {
+      const j = JSON.parse(content);
+      const hosts = Array.isArray(j?.hosting) ? j.hosting : j?.hosting ? [j.hosting] : [];
+      list = hosts.flatMap((h: { redirects?: unknown[] }) => (Array.isArray(h?.redirects) ? h.redirects : []));
+    } catch { /* malformed JSON */ }
+    for (const r of list as { source?: string; regex?: string }[]) {
+      if (typeof r?.source === "string") for (const g of expandBraces(r.source)) add(g);
+      else if (typeof r?.regex === "string") add(regexToRoute(r.regex));
+    }
+  } else if (name === ".htaccess") {
+    for (const raw of content.split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line || line.startsWith("#")) continue;
+      let m: RegExpExecArray | null;
+      if ((m = /^Redirect(?:Permanent|Temp)?\s+(?:(?:30[1278]|permanent|temp|seeother|gone)\s+)?(\/\S*)/i.exec(line))) {
+        add(m[1].replace(/\/+$/, "") + "/*"); // Redirect is a prefix match; /* also covers the bare path
+      } else if ((m = /^RedirectMatch\s+(?:(?:30[1278]|permanent|temp|seeother|gone)\s+)?(\S+)/i.exec(line))) {
+        add(regexToRoute(m[1].replace(/^"|"$/g, "")));
+      } else if ((m = /^RewriteRule\s+(\S+)\s+\S+\s+\[([^\]]*)\]/i.exec(line)) && /\bR(?:=\d+)?\b/i.test(m[2])) {
+        add(regexToRoute(m[1].replace(/^"|"$/g, "")));
+      }
+    }
+  } else if (/\.nginx(?:\.conf)?$|\.conf$/.test(name)) {
+    const nc = content.replace(/^\s*#.*$/gm, "");
+    for (const m of nc.matchAll(/\brewrite\s+(\S+)\s+\S+\s+(?:permanent|redirect)\s*;/g)) add(regexToRoute(m[1].replace(/^["']|["']$/g, "")));
+    for (const m of nc.matchAll(/\blocation\s+(=\s+|~\*?\s+|\^~\s+)?(\S+)\s*\{[^{}]*?\breturn\s+30[12378]\b/g)) {
+      const mod = (m[1] ?? "").trim(), p = m[2].replace(/^["']|["']$/g, "");
+      if (mod.startsWith("~")) add(regexToRoute(p));
+      else if (mod === "=") add(p);
+      else if (p !== "/") add(p.replace(/\/+$/, "") + "/*"); // prefix location
+    }
+  } else if (name.startsWith("docusaurus.config")) {
+    if (!/client-redirects/.test(content)) return;
+    for (const m of content.matchAll(/\bfrom\s*:\s*(\[[^\]]*\]|(['"`])[^'"`]*\2)/g)) for (const s of m[1].matchAll(/(['"`])([^'"`]*)\1/g)) add(s[2]);
+  } else if (/^hooks\.server\./.test(name)) {
+    // simple forms only: `pathname === '/old'` followed by redirect(…), or an object/Map literal of '/old': '/new'
+    for (const m of content.matchAll(/pathname\s*===?\s*(['"`])(\/[^'"`]*)\1[^;{}]{0,80}?(?:\)\s*(?:\{|=>)?\s*)?[\s\S]{0,120}?\bredirect\s*\(/g)) add(m[2]);
+    for (const m of content.matchAll(/\b(?:redirects?|redirectMap|redirectsMap|REDIRECTS)\b[^=]*=\s*(?:new Map\(\s*)?(\[|\{)([\s\S]*?)(?:\]\s*\)|\]|\})\s*;/g)) {
+      for (const e of m[2].matchAll(/(['"`])(\/[^'"`]*)\1\s*[:,]\s*(['"`])\/?[^'"`]*\3/g)) add(e[2]);
+    }
   } else {
     // next.config: only `{ source, destination }` pairs (not `headers()` entries)
     for (const m of content.matchAll(/\bsource\s*:\s*(['"`])([^'"`]+)\1[^{}]{0,200}?\bdestination\s*:/g)) add(m[2]);
@@ -106,15 +185,16 @@ export function redirectSources(file: string, content: string): string[] {
     if (r) for (const m of r[1].matchAll(/(['"`])(\/[^'"`]*)\1\s*:/g)) add(m[2]);
     for (const m of content.matchAll(/(['"`])(\/[^'"`]*)\1\s*:\s*\{\s*redirect\b/g)) add(m[2]); // nuxt routeRules
   }
-  return [...out];
 }
 
 export function redirectCovers(sources: Iterable<string>, route: string): boolean {
   for (const s of sources) {
     if (s === route) return true;
-    if (/[:*]/.test(s) && routeToRegExp(s).test(route)) return true;
-    // route "/blog/:slug" is covered by "/blog/*" or "/blog/:slug"
-    if (isDynamic(route) && s.replace(/\*$/, "") !== "" && route.startsWith(s.replace(/\/?\*$/, "") + "/") && s.endsWith("*")) return true;
+    try {
+      if (/[:*]/.test(s) && routeToRegExp(s).test(route)) return true;
+      // route "/blog/:slug" is covered by "/blog/*" or "/blog/:slug"
+      if (isDynamic(route) && s.replace(/\*$/, "") !== "" && route.startsWith(s.replace(/\/?\*$/, "") + "/") && s.endsWith("*")) return true;
+    } catch { /* bad pattern: ignore */ }
   }
   return false;
 }

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.0
+- **More redirect formats** (so removed routes covered by a redirect are not flagged): `firebase.json` `hosting.redirects` (`source` globs incl. `{a,b}`, `regex`), Cloudflare Pages / Netlify `_redirects` edge cases (splats, placeholders, status codes incl. `301!`, absolute-URL and query sources, comments, tabs), nginx (`rewrite … permanent|redirect;`, `location = /x { return 301 …; }`, prefix and `~` locations), Apache `.htaccess` (`Redirect`, `RedirectMatch`, `RewriteRule … [R=301]`), Docusaurus `@docusaurus/plugin-client-redirects` (`from`), and SvelteKit `hooks.server` (only simple `pathname === '/x'` + `redirect()` checks and literal redirect maps — complex logic is skipped).
+- Redirect parsing and pattern compilation never throw on malformed input.
+- CI (`ci.yml`) and tag-triggered npm trusted publishing with provenance (`release.yml`); see `RELEASING.md`.
+
 ## 0.2.0
 - **SEO components/props**: `<NextSeo title description canonical noindex>`, generic `<SEO|Seo|Head|Meta title=…>`, Astro `<Layout title description>`, Nuxt `useHead`/`useSeoMeta` (incl. `meta: [{name:…}]`), SvelteKit `<svelte:head>`, Remix `meta`/`links` exports. Removal/emptying follows the literal-tag rules; a `noindex` prop is the new CRITICAL rule `component-noindex`.
 - **Layout inheritance**: per-session ledger of SEO facts. A title/description/canonical/JSON-LD "removed" finding is suppressed when an ancestor layout/parent (Next app nesting, `_app`/`_document`, SvelteKit `+layout`, Nuxt layouts/app.vue, imported Astro/Vue/Svelte layouts) or a descendant page carries it in the same session — in either order. `/seo-guard` resolves ancestors before reporting `missing-title|description|canonical`.

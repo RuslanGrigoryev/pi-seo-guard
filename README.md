@@ -4,7 +4,7 @@ A [Pi](https://pi.dev) extension that stops the coding agent from silently wreck
 
 ## Demo
 
-![pi-seo-guard demo](https://raw.githubusercontent.com/RuslanGrigoryev/pi-seo-guard/main/docs/demo.gif)
+![pi-seo-guard demo](https://raw.githubusercontent.com/pi-marketer/pi-seo-guard/main/docs/demo.gif)
 
 ## Install
 
@@ -145,7 +145,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }      # needed to read the base branch
-      - uses: RuslanGrigoryev/pi-seo-guard@v0.4.0
+      - uses: pi-marketer/pi-seo-guard@v0.4.0
         with:
           fail-on: critical           # critical | warn | none
           # base: origin/main         # default: the PR base branch

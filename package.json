@@ -50,11 +50,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/RuslanGrigoryev/pi-seo-guard.git"
+    "url": "git+https://github.com/pi-marketer/pi-seo-guard.git"
   },
-  "homepage": "https://github.com/RuslanGrigoryev/pi-seo-guard#readme",
+  "homepage": "https://github.com/pi-marketer/pi-seo-guard#readme",
   "bugs": {
-    "url": "https://github.com/RuslanGrigoryev/pi-seo-guard/issues"
+    "url": "https://github.com/pi-marketer/pi-seo-guard/issues"
   },
   "author": "Ruslan Hryhoriev",
   "bin": {

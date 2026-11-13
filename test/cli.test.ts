@@ -15,7 +15,10 @@ const run = (argv: string[]) => { const out: string[] = [], err: string[] = []; 
 
 const page = (title: string) => `export const metadata = { title: ${JSON.stringify(title)}, description: "d" }\nexport default () => <h1>x</h1>\n`;
 
+// CI sets GITHUB_BASE_REF on pull_request runs; the temp repos below have no origin.
+const savedBaseRef = process.env.GITHUB_BASE_REF;
 beforeEach(() => {
+  delete process.env.GITHUB_BASE_REF;
   dir = mkdtempSync(join(tmpdir(), "seo-cli-"));
   sh("init", "-q", "-b", "main");
   sh("config", "user.email", "t@t.t"); sh("config", "user.name", "t");
@@ -25,7 +28,10 @@ beforeEach(() => {
   put("public/robots.txt", "User-agent: *\nAllow: /\n");
   commit("init");
 });
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+afterEach(() => {
+  rmSync(dir, { recursive: true, force: true });
+  if (savedBaseRef === undefined) delete process.env.GITHUB_BASE_REF; else process.env.GITHUB_BASE_REF = savedBaseRef;
+});
 
 describe("pi-seo-guard check", () => {
   it("clean tree → exit 0", () => {

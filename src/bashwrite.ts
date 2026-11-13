@@ -2,6 +2,7 @@ import { existsSync, statSync } from "node:fs";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { type SeoGuardConfig, severityOf } from "./config.ts";
 import { matchesAny } from "./glob.ts";
+import { filterIgnored } from "./ignore.ts";
 import { type Finding, diffFile, isLayoutFile, isRootLayout } from "./rules.ts";
 import { kindOf } from "./extract.ts";
 import { fileToRoute, isRedirectConfig } from "./routes.ts";
@@ -491,7 +492,7 @@ export function bashWriteFindings(cwd: string, command: string, cfg: SeoGuardCon
       const rule = crit ? "unverifiable-critical-write" : "unverifiable-write";
       const severity = severityOf(cfg, rule);
       if (severity === "off") continue;
-      out.push({ rule, severity, file: st.r, message: `A bash command modifies \`${st.r}\` in a way pi-seo-guard cannot simulate (sed/perl/redirect/cp/tee…), so the result can't be checked for ${crit ? "site-wide de-indexing or crawl blocking" : "SEO regressions"}. Prefer the edit/write tools for SEO files.` });
+      out.push(...filterIgnored([{ rule, severity, file: st.r, message: `A bash command modifies \`${st.r}\` in a way pi-seo-guard cannot simulate (sed/perl/redirect/cp/tee…), so the result can't be checked for ${crit ? "site-wide de-indexing or crawl blocking" : "SEO regressions"}. Prefer the edit/write tools for SEO files.` }], cfg));
     } else if (st.cur !== null && st.cur !== st.before) out.push(...diffFile(st.r, st.before, st.cur, cfg));
   }
   return out;

@@ -1,6 +1,7 @@
 import { basename } from "node:path";
 import { type Facts, extractFacts } from "./extract.ts";
 import { type RuleId, type Severity, type SeoGuardConfig, severityOf } from "./config.ts";
+import { filterIgnored } from "./ignore.ts";
 import type { Reader } from "./resolve.ts";
 import { isRedirectConfig, redirectSources } from "./routes.ts";
 
@@ -49,6 +50,10 @@ export function sitemapLocs(xml: string): string[] {
 
 /** Compare before/after content of one file and return findings. `before` null = new file. */
 export function diffFile(rel: string, before: string | null, after: string, cfg: SeoGuardConfig, readers?: { before?: Reader; after?: Reader }): Finding[] {
+  return filterIgnored(diffFileRaw(rel, before, after, cfg, readers), cfg, after);
+}
+
+function diffFileRaw(rel: string, before: string | null, after: string, cfg: SeoGuardConfig, readers?: { before?: Reader; after?: Reader }): Finding[] {
   const out: (Finding | null)[] = [];
   const name = basename(rel);
 

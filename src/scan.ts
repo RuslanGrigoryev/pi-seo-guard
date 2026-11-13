@@ -4,6 +4,7 @@ import { matchesAny } from "./glob.ts";
 import { type Finding, isLayoutFile, sitemapLocs } from "./rules.ts";
 import { extractFacts, kindOf } from "./extract.ts";
 import { fileToRoute, isDynamic, isRedirectConfig, matchesRoute, normalizePath, redirectCovers, redirectSources } from "./routes.ts";
+import { isIgnored } from "./ignore.ts";
 import { diskReader } from "./resolve.ts";
 import { ancestorsOf } from "./inherit.ts";
 import { gitHeadFiles, readText, walk } from "./fs.ts";
@@ -34,7 +35,9 @@ export function scanProject(cwd: string, cfg: SeoGuardConfig): ScanResult {
   const notes: string[] = [];
   const add = (rule: Finding["rule"], file: string, message: string) => {
     const severity = severityOf(cfg, rule);
-    if (severity !== "off") findings.push({ rule, severity, file, message });
+    if (severity === "off") return;
+    const f: Finding = { rule, severity, file, message };
+    if (!isIgnored(f, cfg, read(file))) findings.push(f);
   };
 
   const files = walk(cwd, cfg.ignore);

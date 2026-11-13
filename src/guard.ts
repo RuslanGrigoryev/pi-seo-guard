@@ -6,6 +6,7 @@ import { type Finding, diffFile, isLayoutFile } from "./rules.ts";
 import { extractFacts, kindOf } from "./extract.ts";
 import { fileToRoute, isHomepage, isRedirectConfig, redirectCovers, redirectSources } from "./routes.ts";
 import { rel, readText, walk, SKIP_DIRS, NOISE_PATH } from "./fs.ts";
+import { diskReader } from "./resolve.ts";
 import type { SeoLedger } from "./ledger.ts";
 
 const WATCHED_NAMES = /^(?:robots\.txt|sitemap\.xml|vercel\.json|netlify\.toml|_redirects)$/;
@@ -42,7 +43,7 @@ export function checkWrite(cwd: string, toolName: "edit" | "write", input: ToolI
     after = applyEdits(before, input.edits);
   }
   if (after === null) return [];
-  const found = diffFile(r, before, after, cfg);
+  const found = diffFile(r, before, after, cfg, { after: diskReader(cwd) });
   return ledger ? ledger.observe(cwd, r, after, found) : found;
 }
 

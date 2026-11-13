@@ -4,6 +4,7 @@ import { matchesAny } from "./glob.ts";
 import { type Finding, isLayoutFile, sitemapLocs } from "./rules.ts";
 import { extractFacts, kindOf } from "./extract.ts";
 import { fileToRoute, isDynamic, isRedirectConfig, matchesRoute, normalizePath, redirectCovers, redirectSources } from "./routes.ts";
+import { diskReader } from "./resolve.ts";
 import { ancestorsOf } from "./inherit.ts";
 import { gitHeadFiles, readText, walk } from "./fs.ts";
 
@@ -37,6 +38,8 @@ export function scanProject(cwd: string, cfg: SeoGuardConfig): ScanResult {
   };
 
   const files = walk(cwd, cfg.ignore);
+  const reader = diskReader(cwd);
+  const xf = (f: string, src: string) => extractFacts(f, src, reader);
   const text = new Map<string, string>();
   const read = (f: string) => { if (!text.has(f)) text.set(f, readText(resolve(cwd, f)) ?? ""); return text.get(f)!; };
 
@@ -57,13 +60,13 @@ export function scanProject(cwd: string, cfg: SeoGuardConfig): ScanResult {
   void routeSet;
 
   // 1. metadata per page
-  const layoutFacts = files.filter((f) => /layout|BaseHead|Head|Seo/i.test(f) && kindOf(f)).map((f) => extractFacts(f, read(f))).filter(Boolean);
+  const layoutFacts = files.filter((f) => /layout|BaseHead|Head|Seo/i.test(f) && kindOf(f)).map((f) => xf(f, read(f))).filter(Boolean);
   // canonical is optional: only expect it per page when the project uses it somewhere
   const canonicalConvention = (() => {
     // canonical is optional: expect it per page only when most pages (or a layout) declare it
     const pages = [...routes.values()].filter((f) => { const k = kindOf(f); return k && k !== "script"; });
-    const withCanon = pages.filter((f) => extractFacts(f, read(f))?.canonical === "present").length;
-    const inLayout = files.some((f) => isLayoutFile(f) && extractFacts(f, read(f))?.canonical === "present");
+    const withCanon = pages.filter((f) => xf(f, read(f))?.canonical === "present").length;
+    const inLayout = files.some((f) => isLayoutFile(f) && xf(f, read(f))?.canonical === "present");
     return inLayout || (pages.length > 0 && withCanon / pages.length >= 0.5);
   })();
   const layoutHas = (k: "title" | "description" | "canonical") => layoutFacts.some((x) => x![k] === "present");
@@ -71,13 +74,13 @@ export function scanProject(cwd: string, cfg: SeoGuardConfig): ScanResult {
     if (isDynamic(route) && /\.(?:[jt]sx?)$/.test(f) && !/generateMetadata|metadata/.test(read(f))) { /* still check below */ }
     const k = kindOf(f);
     if (!k || k === "script") continue;
-    const facts = extractFacts(f, read(f));
+    const facts = xf(f, read(f));
     if (!facts) continue;
     const frontLayout = k === "md" && /^---[\s\S]*?\blayout\s*:/m.test(read(f));
     const next = /^(?:src\/)?(?:app|pages)\//.test(f);
     const fileSet = new Set(files);
     const anc = ancestorsOf(f, read(f), (r) => fileSet.has(r), (r) => (fileSet.has(r) ? read(r) : null))
-      .map((a) => extractFacts(a, read(a))).filter(Boolean) as NonNullable<ReturnType<typeof extractFacts>>[];
+      .map((a) => xf(a, read(a))).filter(Boolean) as NonNullable<ReturnType<typeof extractFacts>>[];
     // ancestors found (Next nesting, Astro/Vue/Svelte imports) → trust them; none resolvable → fall back to any layout-like file
     const inherit = (key: "title" | "description" | "canonical") => frontLayout || (anc.length ? anc.some((x) => x[key] === "present") : layoutHas(key && key) && !next);
     if (k === "vue" && /<template>\s*<(?:NuxtPage|RouterView|router-view)\b[^>]*\/?>(?:\s*<\/(?:NuxtPage|RouterView|router-view)>)?\s*<\/template>/.test(read(f))) continue; // pure parent-route wrapper

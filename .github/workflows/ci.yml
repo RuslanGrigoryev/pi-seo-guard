@@ -27,4 +27,4 @@ jobs:
           d=$(mktemp -d); cd "$d"; git init -q; npm init -y >/dev/null
           npm i --no-audit --no-fund --omit=peer "$GITHUB_WORKSPACE"/pi-seo-guard-*.tgz
           git -c user.email=a@b -c user.name=a commit -q --allow-empty -m i
-          npx pi-seo-guard check
+          npx pi-seo-guard check --base HEAD

@@ -1,6 +1,9 @@
 import { Parser } from "htmlparser2";
+import { readExpr, type Presence, type Rc, type Reader, emptyReader, overlayReader, parseImports, presenceOfExpr, resolveModule } from "./resolve.ts";
 
-export type Presence = "present" | "empty" | "absent";
+export type { Presence };
+
+const selfRc = (file: string, src: string, reader?: Reader): Rc => ({ file, reader: overlayReader(reader ?? emptyReader, file, src) });
 
 export interface Facts {
   title: Presence;
@@ -70,18 +73,28 @@ const JSONLD_COMPONENT = /^(?:\w*JsonLd|\w*JSONLD|\w*JsonLD)$/;
 /** `{ ...template }` / `${}` markers: the text is templated, so its JSON validity can't be judged. */
 const TEMPLATED = /\{\{|\$\{|\{[#@:/]?\s*[A-Za-z_$(.\[`]|\{`/;
 
-function propPresence(v: string | undefined): Presence {
+/** Presence of a component prop value (`"x"`, `{expr}`); `{expr}` is resolved through consts/imports, unresolvable → present. */
+function propPresence(v: string | undefined, full?: string, rc?: Rc): Presence {
   if (v === undefined) return "absent";
   const t = v.trim();
   if (!t || /^\{\s*(["'`])\1\s*\}$/.test(t)) return "empty";
+  const m = /^\{([\s\S]*)\}$/.exec(t);
+  if (m && rc && full !== undefined) {
+    const inner = m[1].trim();
+    if (!inner) return "empty";
+    const r = presenceOfExpr(inner, full, rc);
+    return r === "unknown" ? "present" : r;
+  }
   return "present";
 }
 const propTrue = (attrs: Record<string, string>, k: string) =>
   k in attrs && !/^\{?\s*["']?false["']?\s*\}?$/i.test(attrs[k].trim());
 
 /** Parse markup (html/jsx/astro/vue/svelte) with htmlparser2. Lenient: never throws. */
-export function extractMarkup(src: string, kind: FileKind): Facts {
+export function extractMarkup(src: string, kind: FileKind, rc: Rc = selfRc("", src)): Facts {
   const f = emptyFacts();
+  const full = src;
+  let imports: ReturnType<typeof parseImports> | undefined;
   if (kind === "astro") src = src.replace(/^\s*---[\s\S]*?\n---/, "");
   if (kind === "jsx" || kind === "astro") src = src.replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, "");
   const staticImages = new Set<string>();
@@ -94,7 +107,12 @@ export function extractMarkup(src: string, kind: FileKind): Facts {
   let ldAttrsTemplated = false;
   const parser = new Parser(
     {
-      onopentag(name, attrs) {
+      onopentag(name, attrs0) {
+        let attrs = attrs0;
+        if (kind === "vue") { // `:title="expr"` / `v-bind:title="expr"` → `title={expr}`
+          attrs = {};
+          for (const [k, v] of Object.entries(attrs0)) { const m = /^(?:v-bind)?:([\w-]+)$/.exec(k); if (m) attrs[m[1]] = `{${v}}`; else attrs[k] = v; }
+        }
         const lc = name === "title" || name === "TITLE" ? "title" : name;
         const spread = Object.keys(attrs).some((k) => k.startsWith("{") || k.startsWith("..."));
         if (lc === "title") { inTitle = true; titleText = ""; titleSeen = true; }
@@ -130,20 +148,39 @@ export function extractMarkup(src: string, kind: FileKind): Facts {
           // SEO component props: <NextSeo title description canonical noindex>, <SEO title=…>, <Layout title=…> (astro)
           // custom wrapper (`<MdxHead params={…}/>`) that takes no title prop delegates to another module: assume it supplies them
           const delegating = !LAYOUT_COMPONENT.test(name) && !/^(?:NextSeo|SEO|Seo|Head|Meta|MetaTags|SeoHead|SeoMeta)$/.test(name) && !("title" in attrs) && Object.keys(attrs).length > 0;
-          f.title = best(f.title, delegating ? "present" : propPresence(attrs.title));
-          f.description = best(f.description, delegating ? "present" : propPresence(attrs.description));
+          f.title = best(f.title, delegating ? "present" : propPresence(attrs.title, full, rc));
+          f.description = best(f.description, delegating ? "present" : propPresence(attrs.description, full, rc));
           const canon = attrs.canonical ?? attrs.canonicalurl ?? attrs.canonical_url;
-          f.canonical = best(f.canonical, propPresence(canon));
+          f.canonical = best(f.canonical, propPresence(canon, full, rc));
           if (propTrue(attrs, "noindex")) { f.noindex = true; f.noindexProp = true; }
           if (propTrue(attrs, "nofollow")) f.nofollow = true;
           if (typeof attrs.robots === "string") robotsDirectives(attrs.robots, f);
+        } else if (/^[A-Z]/.test(name) && !rc.wrap && kind !== "html") {
+          // one-level wrapper component: `<PageShell title={x}>` whose own file renders <title>/<SEO title={title}>
+          imports ??= parseImports(full);
+          const imp = imports.get(name);
+          const wfile = imp && imp.imported !== "*" ? resolveModule(rc.reader, rc.file, imp.spec) : null;
+          const wkind = wfile ? kindOf(wfile) : null;
+          const wsrc = wfile && wkind && wkind !== "md" && wkind !== "script" ? rc.reader.read(wfile) : null;
+          if (wfile && wkind && wsrc && /<title\b|<(?:NextSeo|SEO|Seo|SeoHead|SeoMeta|Head|Meta|MetaTags)\b|<meta\b|rel=["']canonical|\buse(?:SeoMeta|Head)\s*\(|\bmetadata\b/.test(wsrc)) {
+            const props: Record<string, Presence> = {};
+            for (const [k, v] of Object.entries(attrs)) {
+              if (k.startsWith("{") || k.startsWith("...")) props["*"] = "present";
+              else props[k.toLowerCase()] = propPresence(v, full, rc);
+            }
+            const wrc: Rc = { reader: rc.reader, file: wfile, props, wrap: true };
+            const wf = mergeFacts(extractMarkup(wsrc, wkind, wrc), extractMetadata(wsrc, wrc));
+            f.title = best(f.title, wf.title);
+            f.description = best(f.description, wf.description);
+            f.canonical = best(f.canonical, wf.canonical);
+          }
         }
       },
       ontext(t) { if (inTitle) titleText += t; if (inLd) ldText += t; },
       onclosetag(name, isImplied) {
         if ((name === "title" || name === "TITLE") && inTitle) {
           inTitle = false;
-          f.title = best(f.title, titleText.trim() ? "present" : "empty");
+          f.title = best(f.title, titleOf(titleText, full, rc));
         }
         if (inLd && (name === "script" || name === "Script")) {
           inLd = false;
@@ -161,6 +198,28 @@ export function extractMarkup(src: string, kind: FileKind): Facts {
   return f;
 }
 
+/** `<title>` text: literal text is present; a lone `{expr}` / `{{ expr }}` is resolved. */
+function titleOf(text: string, full: string, rc: Rc): Presence {
+  const t = text.trim();
+  if (!t) return "empty";
+  const m = /^\{\{?([^{}]+)\}\}?$/.exec(t) ?? /^\{(.+)\}$/s.exec(t);
+  if (m && !/\}\s*\S*\s*\{/.test(t)) {
+    const r = presenceOfExpr(m[1].trim(), full, rc);
+    if (r !== "unknown") return r;
+  }
+  return "present";
+}
+
+function balancedCall(src: string, open: number): string | null {
+  let depth = 0;
+  for (let i = open; i < src.length && i < open + 6000; i++) {
+    const c = src[i];
+    if (c === "(") depth++;
+    else if (c === ")" && --depth === 0) return src.slice(open - 8 > 0 ? open - 8 : 0, i + 1);
+  }
+  return null;
+}
+
 function balanced(src: string, open: number): string {
   let depth = 0;
   for (let i = open; i < src.length; i++) {
@@ -172,7 +231,7 @@ function balanced(src: string, open: number): string {
 }
 
 /** Regex-based extraction of Next.js `metadata` / `generateMetadata` (and Nuxt useHead/useSeoMeta). */
-export function extractMetadata(src: string): Facts {
+export function extractMetadata(src: string, rc: Rc = selfRc("", src)): Facts {
   const f = emptyFacts();
   const regions: string[] = [];
   const re = /export\s+(?:const|let)\s+metadata\b[^=]*=\s*/g;
@@ -184,7 +243,12 @@ export function extractMetadata(src: string): Facts {
   const g = /generateMetadata\b/.exec(src);
   if (g) regions.push(src.slice(g.index, g.index + 3000));
   const h = /\b(?:useHead|useSeoMeta|definePageMeta)\s*\(/g;
-  while ((m = h.exec(src))) regions.push(src.slice(m.index, m.index + 1500));
+  while ((m = h.exec(src))) {
+    // the call's own argument list (a fixed 1500-char slice would also swallow neighbouring calls such as defineOgImage({ title }))
+    const open = m.index + m[0].length - 1;
+    const body = balancedCall(src, open);
+    regions.push(body ?? src.slice(m.index, m.index + 1500));
+  }
   // Remix `meta` / `links` exports
   const rx = /export\s+(?:async\s+)?(?:const|function)\s+(?:meta|links)\b/g;
   while ((m = rx.exec(src))) regions.push(src.slice(m.index, m.index + 2500));
@@ -199,11 +263,17 @@ export function extractMetadata(src: string): Facts {
     while ((mm = r.exec(region))) {
       const rest = region.slice(mm.index + mm[0].length);
       const q = /^(['"`])(.*?)\1/s.exec(rest);
-      if (q) best_ = best(best_, q[2].trim() ? "present" : "empty");
-      else if (/^[{\w(\[]/.test(rest)) best_ = best(best_, "present");
+      if (q && !(q[1] === "`" && q[2].includes("${"))) best_ = best(best_, q[2].trim() ? "present" : "empty");
+      else if (/^[{\w(\[`]/.test(rest)) {
+        const r = key === "title" || key === "description" ? presenceOfExpr(readExpr(rest, 0), src, rc) : "unknown";
+        best_ = best(best_, r === "unknown" ? "present" : r);
+      }
     }
     // shorthand property: `{ title, description }`
-    if (best_ === "absent" && new RegExp(`[{,]\\s*${key}\\s*(?:,|\\}|$)`, "m").test(region)) best_ = "present";
+    if (best_ === "absent" && new RegExp(`[{,]\\s*${key}\\s*(?:,|\\}|$)`, "m").test(region)) {
+      const r = key === "title" || key === "description" ? presenceOfExpr(key, src, rc) : "unknown";
+      best_ = r === "unknown" ? "present" : r;
+    }
     return best_;
   };
   f.title = val("title");
@@ -269,10 +339,19 @@ export function extractMarkdown(src: string): Facts {
   return mergeFacts(f, { ...html, title: "absent" });
 }
 
-export function extractFacts(path: string, src: string): Facts | null {
+export function extractFacts(path: string, src: string, reader?: Reader): Facts | null {
   const kind = kindOf(path);
+  const rc = selfRc(path, src, reader);
   if (!kind) return null;
-  if (kind === "md") return extractMarkdown(src);
-  if (kind === "script") return /\bmetadata\b|generateMetadata|useHead|useSeoMeta|export\s+(?:async\s+)?(?:const|function)\s+(?:meta|links)\b|ld\+json/.test(src) ? extractMetadata(src) : null;
-  return mergeFacts(extractMarkup(src, kind), extractMetadata(src));
+  if (kind === "md") {
+    const md = extractMarkdown(src);
+    // MDX with `export const metadata = { title … }`
+    if (/\.mdx$/i.test(path) && /\bexport\s+(?:const|let)\s+metadata\b/.test(src)) {
+      const meta = extractMetadata(src, rc);
+      return mergeFacts(md, meta);
+    }
+    return md;
+  }
+  if (kind === "script") return /\bmetadata\b|generateMetadata|useHead|useSeoMeta|export\s+(?:async\s+)?(?:const|function)\s+(?:meta|links)\b|ld\+json/.test(src) ? extractMetadata(src, rc) : null;
+  return mergeFacts(extractMarkup(src, kind, rc), extractMetadata(src, rc));
 }

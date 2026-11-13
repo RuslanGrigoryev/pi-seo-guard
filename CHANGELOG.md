@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.0
+- **Follow indirection (#15)**: titles/descriptions/canonicals set through same-file `const`s and object properties, values imported from relative modules or tsconfig/jsconfig `paths` aliases (one hop), and one level of wrapper components forwarding props to `<title>`/SEO components/`useSeoMeta`. Empty/`undefined`/missing → same `title-removed`/`description-removed` finding as a literal removal; unresolvable expressions stay unknown (no finding). `useHead`/`useSeoMeta` regions are now the call's own argument list. MDX `export const metadata` is read. Mutation check: nuxt.com 3/28 → 5/28 literal and 0/25 → 20/25 for `const title` indirection, leerob.io 0/3 → 3/3; replay FPs stay 0.
+- **Ignore / allow-list (#17)**: `.seo-guard.json` at the project root (merged with `.pi/seo-guard.json`) with `ignore` objects `{ rule?, routes?, paths? }`, plus inline `seo-guard-ignore [rule…]` comments (`//`, `<!-- -->`, `{/* */}`). Critical rules can only be ignored by explicit rule name. Applies to edit-time checks, bash-write checks, the CLI and `/seo-guard`.
+- **CLI + GitHub Action (#19)**: `pi-seo-guard check [--base] [--format text|json|github] [--fail-on]` and `pi-seo-guard scan`; works without Pi (`npx pi-seo-guard`). Package now ships a compiled `dist/` (built by `prepack`) for the bin; the Pi extension still loads `src/` TS. Composite `action.yml` at repo root.
+
 ## 0.3.0
 - **More redirect formats** (so removed routes covered by a redirect are not flagged): `firebase.json` `hosting.redirects` (`source` globs incl. `{a,b}`, `regex`), Cloudflare Pages / Netlify `_redirects` edge cases (splats, placeholders, status codes incl. `301!`, absolute-URL and query sources, comments, tabs), nginx (`rewrite … permanent|redirect;`, `location = /x { return 301 …; }`, prefix and `~` locations), Apache `.htaccess` (`Redirect`, `RedirectMatch`, `RewriteRule … [R=301]`), Docusaurus `@docusaurus/plugin-client-redirects` (`from`), and SvelteKit `hooks.server` (only simple `pathname === '/x'` + `redirect()` checks and literal redirect maps — complex logic is skipped).
 - Redirect parsing and pattern compilation never throw on malformed input.

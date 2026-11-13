@@ -1,6 +1,8 @@
 import { basename } from "node:path";
 import { type Facts, extractFacts } from "./extract.ts";
 import { type RuleId, type Severity, type SeoGuardConfig, severityOf } from "./config.ts";
+import { filterIgnored } from "./ignore.ts";
+import type { Reader } from "./resolve.ts";
 import { isRedirectConfig, redirectSources } from "./routes.ts";
 
 export interface Finding {
@@ -47,7 +49,11 @@ export function sitemapLocs(xml: string): string[] {
 }
 
 /** Compare before/after content of one file and return findings. `before` null = new file. */
-export function diffFile(rel: string, before: string | null, after: string, cfg: SeoGuardConfig): Finding[] {
+export function diffFile(rel: string, before: string | null, after: string, cfg: SeoGuardConfig, readers?: { before?: Reader; after?: Reader }): Finding[] {
+  return filterIgnored(diffFileRaw(rel, before, after, cfg, readers), cfg, after);
+}
+
+function diffFileRaw(rel: string, before: string | null, after: string, cfg: SeoGuardConfig, readers?: { before?: Reader; after?: Reader }): Finding[] {
   const out: (Finding | null)[] = [];
   const name = basename(rel);
 
@@ -78,9 +84,9 @@ export function diffFile(rel: string, before: string | null, after: string, cfg:
     return out.filter(Boolean) as Finding[];
   }
 
-  const a = extractFacts(rel, after);
+  const a = extractFacts(rel, after, readers?.after);
   if (!a) return [];
-  const b: Facts | null = before === null ? null : extractFacts(rel, before);
+  const b: Facts | null = before === null ? null : extractFacts(rel, before, readers?.before ?? readers?.after);
   if (!b) {
     // brand-new file: only flag directives that are harmful regardless of history
     if (a.noindex && isLayoutFile(rel)) out.push(mk(cfg, "sitewide-noindex", rel, "Layout sets noindex — applies to every page that uses it."));

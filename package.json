@@ -1,6 +1,6 @@
 {
   "name": "pi-seo-guard",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Pi coding-agent extension that guards SEO-critical markup, robots.txt, sitemaps, routes and redirects while the agent edits your site",
   "keywords": [
     "pi-package",
@@ -24,13 +24,17 @@
   "files": [
     "src",
     "!src/**/*.test.ts",
+    "dist",
+    "action.yml",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
     "test": "vitest run",
     "tsc": "tsc --noEmit",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build"
   },
   "dependencies": {
     "htmlparser2": "^10.0.0"
@@ -46,11 +50,14 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/RuslanGrigoryev/pi-seo-guard.git"
+    "url": "git+https://github.com/pi-marketer/pi-seo-guard.git"
   },
-  "homepage": "https://github.com/RuslanGrigoryev/pi-seo-guard#readme",
+  "homepage": "https://github.com/pi-marketer/pi-seo-guard#readme",
   "bugs": {
-    "url": "https://github.com/RuslanGrigoryev/pi-seo-guard/issues"
+    "url": "https://github.com/pi-marketer/pi-seo-guard/issues"
   },
-  "author": "Ruslan Hryhoriev"
+  "author": "Ruslan Hryhoriev",
+  "bin": {
+    "pi-seo-guard": "dist/cli.js"
+  }
 }

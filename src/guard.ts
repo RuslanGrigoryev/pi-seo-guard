@@ -6,6 +6,8 @@ import { type Finding, diffFile, isLayoutFile } from "./rules.ts";
 import { extractFacts, kindOf } from "./extract.ts";
 import { fileToRoute, isHomepage, isRedirectConfig, redirectCovers, redirectSources } from "./routes.ts";
 import { rel, readText, walk, SKIP_DIRS, NOISE_PATH } from "./fs.ts";
+import { filterIgnored } from "./ignore.ts";
+import { diskReader } from "./resolve.ts";
 import type { SeoLedger } from "./ledger.ts";
 
 const WATCHED_NAMES = /^(?:robots\.txt|sitemap\.xml|vercel\.json|netlify\.toml|_redirects)$/;
@@ -42,7 +44,7 @@ export function checkWrite(cwd: string, toolName: "edit" | "write", input: ToolI
     after = applyEdits(before, input.edits);
   }
   if (after === null) return [];
-  const found = diffFile(r, before, after, cfg);
+  const found = diffFile(r, before, after, cfg, { after: diskReader(cwd) });
   return ledger ? ledger.observe(cwd, r, after, found) : found;
 }
 
@@ -102,10 +104,10 @@ export function routeRemovalsFromBash(cwd: string, command: string, cfg: SeoGuar
 export function criticalRemovalFindings(removals: PendingRouteRemoval[], cfg: SeoGuardConfig): Finding[] {
   const sev = severityOf(cfg, "homepage-removed");
   if (sev === "off") return [];
-  return removals.filter((r) => isHomepage(r.route)).map((r) => ({
+  return filterIgnored(removals.filter((r) => isHomepage(r.route)).map((r) => ({
     rule: "homepage-removed" as const, severity: sev, file: r.file,
     message: "Deletes/moves the homepage route (`/`).",
-  }));
+  })), cfg);
 }
 
 /** Post-execution: removals whose route no longer exists and has no redirect. */
@@ -125,7 +127,7 @@ export function unredirectedRemovals(cwd: string, removals: PendingRouteRemoval[
     if (live.has(r.route) || redirectCovers(sources, r.route)) continue;
     out.push({ rule: "route-removed", severity: sev, file: r.file, message: `Route \`${r.route}\` no longer exists and no redirect (vercel.json / netlify.toml / _redirects / next.config) covers it — old URL will 404. Add a redirect or restore the page.` });
   }
-  return out;
+  return filterIgnored(out, cfg);
 }
 
 export { isLayoutFile, extractFacts };
@@ -159,8 +161,8 @@ export function snapshotRemovalFindings(cwd: string, before: RouteSnapshot, cfg:
   const handled = new Set(already.map((r) => r.route));
   const hp = gone.find((r) => isHomepage(r.route));
   if (hp && !handled.has("/") && severityOf(cfg, "homepage-removed") !== "off") {
-    out.push({ rule: "homepage-removed", severity: severityOf(cfg, "homepage-removed") as "critical" | "warn", file: hp.file,
-      message: "The homepage route (`/`) was DELETED by this command and it could not be blocked beforehand. RESTORE IT NOW (e.g. `git checkout -- " + hp.file + "`) unless the user explicitly asked for this." });
+    out.push(...filterIgnored([{ rule: "homepage-removed", severity: severityOf(cfg, "homepage-removed") as "critical" | "warn", file: hp.file,
+      message: "The homepage route (`/`) was DELETED by this command and it could not be blocked beforehand. RESTORE IT NOW (e.g. `git checkout -- " + hp.file + "`) unless the user explicitly asked for this." }], cfg));
   }
   const rest = gone.filter((r) => !isHomepage(r.route) && !handled.has(r.route));
   out.push(...unredirectedRemovals(cwd, rest, cfg));

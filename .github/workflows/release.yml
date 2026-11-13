@@ -19,6 +19,7 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npx tsc --noEmit
+      - run: npm run build # also runs via `prepack`; explicit so a build failure stops the job before the tag check
       - name: Verify tag matches package.json version
         run: |
           PKG="v$(node -p "require('./package.json').version")"
